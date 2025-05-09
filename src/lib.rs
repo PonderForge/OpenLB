@@ -3,6 +3,7 @@ mod partition;
 mod classifier;
 
 use object::{detect_image, detect_warmup};
+use opencv::imgcodecs::imwrite;
 use opencv::imgcodecs::IMREAD_UNCHANGED;
 use ort::ExecutionProviderDispatch;
 use partition::{segment_image, segment_warmup};
@@ -15,8 +16,6 @@ use opencv::imgproc::*;
 use std::time::Instant;
 #[cfg(feature = "bincode")]
 use bincode::{Encode, Decode};
-#[cfg(feature = "gif")]
-use opencv::videoio::VideoCapture;
 
 #[derive(Debug)]
 pub struct LBCleaner {
@@ -95,11 +94,14 @@ impl LBCleaner {
     pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: CleanLevel) {
         let input_img = &opencv::imgcodecs::imread(input_path, IMREAD_UNCHANGED).unwrap();
         let out = self.clean_mat(&input_img, level);
-        opencv::imgcodecs::imwrite(output_path, &out, &opencv::core::Vector::new()).unwrap();
+        if out.is_some() {
+            opencv::imgcodecs::imwrite(output_path, &out.unwrap(), &opencv::core::Vector::new()).unwrap();
+        }
     }
 
-    pub fn clean_mat(&self, input_img: &Mat, level: CleanLevel) -> Mat {
+    pub fn clean_mat(&self, input_img: &Mat, level: CleanLevel) -> Option<Mat> {
         let mut exit_img = input_img.clone();
+        let mut changed = false;
         let mut processed_for_ai = Mat::default();
         cvt_color_def(&input_img, &mut processed_for_ai, COLOR_BGRA2BGR).unwrap();
         let now = Instant::now();
@@ -109,8 +111,9 @@ impl LBCleaner {
             println!("Level 0 Time: {:?}", now.elapsed());
             if metric[0][4] > self.human_thresholds.sexy || metric[0][1] > self.human_thresholds.hentai || metric[0][3] > self.human_thresholds.porn {
                 println!("Detected NSFW Content");
-                let overlay = create_overlay(exit_img.cols(), exit_img.rows(), Scalar::new( metric[0][3] as f64 * 200.0, metric[0][1] as f64 * 200.0, metric[0][4] as f64 * 200.0, 0.0));
+                let overlay = create_overlay(exit_img.cols(), exit_img.rows(), Scalar::new( metric[0][3] as f64 * 200.0, metric[0][1] as f64 * 200.0, metric[0][4] as f64 * 200.0, 0.0), input_img.channels());
                 exit_img = overlay;
+                changed = true;
             }
         } else {
             //Run Human Detector and convert to Vector
@@ -130,11 +133,12 @@ impl LBCleaner {
                     println!("Classify Time: {:?}", now2.elapsed());
                     for i in 0..humans.len() {
                         println!("Human Metric: {:?}", human_metrics[i]);
-                        //rectangle(&mut exit_img, Rect::from_point_size(Point::new(humans[i].0 as i32, humans[i].1 as i32), Size::new(humans[i].2 as i32, humans[i].3 as i32)), Scalar::new(human_metrics[i][1] as f64 * 255.0, 0.0, 0.0, 0.0), 20, LINE_8, 0);
+                        //rectangle(&mut exit_img, Rect::from_point_size(Point::new(humans[i].0 as i32, humans[i].1 as i32), Size::new(humans[i].2 as i32, humans[i].3 as i32)), Scalar::new(human_metrics[i][1] as f64 * 255.0, 0.0, 0.0, 0.0), -1, LINE_8, 0);
                         if human_metrics[i][4] > self.overall_thresholds.sexy || human_metrics[i][1] > self.overall_thresholds.hentai || human_metrics[i][3] > self.overall_thresholds.porn {
                             println!("Detected NSFW Content");
-                            let overlay = create_overlay(humans[i].2 as i32, humans[i].3 as i32, Scalar::new( human_metrics[i][3] as f64 * 200.0, human_metrics[i][1] as f64 * 200.0, human_metrics[i][4] as f64 * 200.0, 0.0));
-                            overlay.copy_to(&mut exit_img.roi_mut(Rect_ { x: humans[i].0 as i32, y: humans[i].1 as i32, width: humans[i].2 as i32, height: humans[i].3 as i32 }).unwrap()).unwrap();
+                            let overlay = create_overlay(humans[i].2 as i32, humans[i].3 as i32, Scalar::new( human_metrics[i][3] as f64 * 200.0, human_metrics[i][1] as f64 * 200.0, human_metrics[i][4] as f64 * 200.0, 0.0), input_img.channels());
+                            overlay.copy_to(&mut Mat::roi_mut(&mut exit_img, Rect_ { x: humans[i].0 as i32, y: humans[i].1 as i32, width: humans[i].2 as i32, height: humans[i].3 as i32 }).unwrap()).unwrap();
+                            changed = true;
                         }
                     }
                     println!("Level 1 Time: {:?}", now.elapsed());
@@ -183,6 +187,7 @@ impl LBCleaner {
                             if part_metric[4] > self.part_thresholds.sexy || part_metric[1] > self.part_thresholds.hentai || part_metric[3] > self.part_thresholds.porn {
                                 println!("Detected NSFW Content");
                                 fill_convex_poly_def(&mut exit_img, &Vector::from_slice(&svertices), Scalar::new( part_metric[3] as f64 * 200.0, part_metric[1] as f64 * 200.0,part_metric[4] as f64 * 200.0, 0.0)).unwrap();
+                                changed = true;
                             }
                             c+=1;
                         }
@@ -191,24 +196,74 @@ impl LBCleaner {
                     println!("Level 2 Time: {:?}", now.elapsed());
                 }
             } else if level == CleanLevel::OriginalLB {
-                exit_img = self.clean_mat(input_img, CleanLevel::Overall);
+                let overall_output = self.clean_mat(input_img, CleanLevel::Overall);
+                if overall_output.is_some() {
+                    exit_img = overall_output.unwrap();
+                    changed = true;
+                }
             }
         }
-        exit_img
+        if changed {
+            return Some(exit_img);
+        } else {
+            return None;
+        }
     }
 
-    // #[cfg(feature = "gif")]
-    // //Automatic GIF Cleaning Level is Overall, since any other level would probably crash your computer
-    // pub fn clean_gif (&self, input_gif: &[u8]) {
-    //     use opencv::videoio::VideoCaptureTrait;
-    //     let capture = VideoCapture::default().unwrap();
-    //     capture.open_1(source, api_preference, params);
-    //     ()
-    // }
+    #[cfg(feature = "gif")]
+    //Automatic GIF Cleaning Level is Overall, since any other level would probably crash your computer
+    pub fn clean_gif<R> (&self, input_gif: R) -> Option<Vec<u8>> where R: std::io::Read {
+        use std::ffi::c_void;
+
+        let mut decoder = gif::DecodeOptions::new();
+        decoder.set_color_output(gif::ColorOutput::RGBA);
+        let mut decoder = decoder.read_info(input_gif).unwrap();
+        let width = decoder.width() as i32;
+        let height = decoder.height() as i32;
+        let colormap = decoder.global_palette().unwrap_or(&[]).to_owned();
+        let repeat = decoder.repeat();
+        let mut src = Mat::zeros(height, width, CV_8UC4).unwrap().to_mat().unwrap();
+        let mut cleaned_frames: Vec<Vec<u8>> = Vec::new();
+        let mut changed = false;
+        while let Some(frame) = decoder.read_next_frame().unwrap() {
+            let data = &frame.buffer;
+            let image_raw = unsafe {
+                Mat::new_rows_cols_with_data_unsafe_def(height, width, CV_8UC4, data.as_ptr() as *mut c_void).unwrap()
+            };
+            let mut image = Mat::default();
+            cvt_color_def(&image_raw, &mut image, COLOR_RGBA2BGRA).unwrap();
+            let mut img_layers: Vector<Mat> = Vector::new();
+            split(&image, &mut img_layers);
+            image.copy_to_masked(&mut src, &img_layers.get(3).unwrap()).unwrap();
+            let cleaned = self.clean_mat(&src, CleanLevel::Human);
+            if cleaned.is_some() {
+                let mut image2 = Mat::default();
+                cvt_color_def(&cleaned.unwrap(), &mut image2, COLOR_BGRA2RGB).unwrap();
+                cleaned_frames.push(image2.data_bytes().unwrap().to_vec());
+                changed = true;
+            } else {
+                cleaned_frames.push(frame.buffer.to_vec());
+            }
+        }
+        if changed {
+            let mut out_file: Vec<u8> = Vec::new();
+            {
+                let mut encoder = gif::Encoder::new(&mut out_file, width as u16, height as u16, &colormap).unwrap();
+                encoder.set_repeat(repeat).unwrap();
+                for state in &cleaned_frames {
+                    let frame = gif::Frame::from_rgb(width as u16, height as u16, state.as_slice());
+                    encoder.write_frame(&frame).unwrap();
+                }
+            }
+            return Some(out_file);
+        } else {
+            return None;
+        }
+    }
 }
 
 //Create Overlay for NSFW Content
-fn create_overlay (width: i32, height: i32, color: Scalar) -> Mat {
+fn create_overlay (width: i32, height: i32, color: Scalar, channels: i32) -> Mat {
     let mut husk = Mat::zeros(64, 64, CV_8UC4).unwrap().to_mat().unwrap();
     husk.set_to_def(&color).unwrap();
     let icon = imdecode(include_bytes!("../icon.png"), IMREAD_UNCHANGED).unwrap();
@@ -227,9 +282,15 @@ fn create_overlay (width: i32, height: i32, color: Scalar) -> Mat {
         let holder = extended.clone();
         resize(&holder, &mut extended, Size::new(width, height), 0.0, 0.0, INTER_NEAREST);
     }
-    let mut out = Mat::default();
-    cvt_color_def(&extended, &mut out, COLOR_BGRA2BGR).unwrap();
-    out
+    let mut mask = Mat::default();
+    if channels == 1 {
+        cvt_color_def(&extended, &mut mask, COLOR_BGRA2GRAY).unwrap();
+    } else if channels == 3 {
+        cvt_color_def(&extended, &mut mask, COLOR_BGRA2BGR).unwrap();
+    } else {
+        mask = extended.clone();
+    }
+    mask
 }
 
 #[cfg(test)]
@@ -243,8 +304,12 @@ mod tests {
         let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
         let cleaner = init(thresholds, thresholds, thresholds, CPUExecutionProvider::default().into());
         cleaner.warmup(20);
-        let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
-        let out = cleaner.clean_mat(&input_img, CleanLevel::Human);
+        let input_img = imread("test.png", IMREAD_UNCHANGED).unwrap();
+        let out = cleaner.clean_mat(&input_img, CleanLevel::OriginalLB);
+        if out.is_none() {
+            panic!("No NSFW Content Detected");
+        }
+        let out = out.unwrap();
         imwrite("out.png", &out, &opencv::core::Vector::new());
     }
 
@@ -261,13 +326,21 @@ mod tests {
         println!("Average Time: {:?}", now.elapsed() / 50);
     }
 
-    // #[test]
-    // #[cfg(feature = "gif")]
+    #[test]
+    #[cfg(feature = "gif")]
 
-    // fn test_gif() {
-    //     let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-    //     let cleaner = init(thresholds, thresholds, thresholds, CPUExecutionProvider::default().into());
-    //     cleaner.warmup(20);
-    //     let out = cleaner.clean_gif(&std::fs::read("unnamed.gif").unwrap());
-    // }
+    fn test_gif() {
+        use std::io::Write;
+
+        let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
+        let cleaner = init(thresholds, thresholds, thresholds, CPUExecutionProvider::default().into());
+        cleaner.warmup(20);
+        let input = std::fs::File::open("test.gif").unwrap();
+        let out = cleaner.clean_gif(input);
+        let mut file = std::fs::File::create("out.gif").unwrap();
+        if out.is_none() {
+            panic!("No NSFW Content Detected");
+        }
+        file.write(&out.unwrap()).unwrap();
+    }
 }

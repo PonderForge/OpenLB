@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-opencv = {version = "0.94.4", default-features = false , features = ["clang-runtime", "imgcodecs", "imgproc", "dnn", "videoio"]}
+opencv = {version = "=0.93.4", default-features = false , features = ["clang-runtime", "imgcodecs", "imgproc", "dnn", "videoio"]}
 ort = { version = "=2.0.0-rc.8", features = ["cuda", "load-dynamic", "tensorrt"]}
 ort-sys = "=2.0.0-rc.8"
 geo = "0.29.3"
 ndarray = "0.16.1"
 bincode = { version = "2.0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+gif = { version = "0.13.1", optional = true }
 
 [features]
 bincode=["dep:bincode"]
-gif=[]
+gif=["dep:gif"]
