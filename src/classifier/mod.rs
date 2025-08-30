@@ -7,7 +7,7 @@ use ort::{inputs, Session, SessionOutputs};
 //Runs NSFW Classification on a image or part of image
 pub fn classify_images (model: &Session, image: &Vector<Mat>) -> Vec<Vec<f32>> {
     //Reformat Image to Classifer Model Input
-    let resized_img: Mat = blob_from_images_with_params(&image, Image2BlobParams::new(Scalar::new(0.0171247538317,0.0175070028011,0.0174291938998,0.0), Size::new(384, 384), Scalar::new(123.675, 116.28, 103.53, 0.0), true, CV_32F, DataLayout::DNN_LAYOUT_NCHW, ImagePaddingMode::DNN_PMODE_NULL).unwrap()).unwrap();
+    let resized_img: Mat = blob_from_images_with_params(&image, Image2BlobParams::new(Scalar::new(0.0171247538317,0.0175070028011,0.0174291938998,0.0), Size::new(384, 384), Scalar::new(123.675, 116.28, 103.53, 0.0), true, CV_32F, DataLayout::DNN_LAYOUT_NCHW, ImagePaddingMode::DNN_PMODE_NULL, VecN::from_array([0.0,0.0,0.0,0.0])).unwrap()).unwrap();
     let input_tensor = ort::Tensor::from_array(([image.len() as usize,3,384,384], resized_img.data_typed::<f32>().unwrap())).unwrap();
     //Perform Inference
     let output_tensor: SessionOutputs = model.run(inputs!["input" => input_tensor].unwrap()).unwrap();

@@ -13,7 +13,7 @@ pub enum MaskType {
 
 pub fn segment_image(segmenter: &Session, input_img: &Vector<Mat>) -> Vec<[Result<RotatedRect, ()>; 2]> {
     //Convert Image to a Float Array
-    let img_array = blob_from_images_with_params(&input_img, Image2BlobParams::new(Scalar::new(0.00390625,0.00390625,0.00390625,0.0), Size::new(512, 512), Scalar::new(128.0, 128.0, 128.0, 0.0), true, CV_32F, DataLayout::DNN_LAYOUT_NCHW, ImagePaddingMode::DNN_PMODE_LETTERBOX).unwrap()).unwrap();
+    let img_array = blob_from_images_with_params(&input_img, Image2BlobParams::new(Scalar::new(0.00390625,0.00390625,0.00390625,0.0), Size::new(512, 512), Scalar::new(128.0, 128.0, 128.0, 0.0), true, CV_32F, DataLayout::DNN_LAYOUT_NCHW, ImagePaddingMode::DNN_PMODE_LETTERBOX, VecN::from_array([0.0,0.0,0.0,0.0])).unwrap()).unwrap();
     let input_tensor = ort::Tensor::from_array(([input_img.len(),3usize,512,512], img_array.data_typed::<f32>().unwrap())).unwrap();
     
     //Run Segmentor
