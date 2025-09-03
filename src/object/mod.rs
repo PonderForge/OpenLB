@@ -7,7 +7,7 @@ use ort::{Session, inputs};
 
 pub mod mbr;
 
-pub fn detect_image(detector: &Session, input_img: &Mat) -> Vec<(f32, f32, f32, f32, usize, f32)> {
+pub fn detect_image(detector: &Session, input_img: &Mat) -> Vec<(f32, f32, f32, f32, f32)> {
     //Convert Image to a Tensor
     let input_tensor = ort::Tensor::from_array(([1usize,3,640,640], obj_preprocess(&input_img).data_typed::<f32>().unwrap())).unwrap();
     //Run the Human Detector (YOLOv11) on the Image Tensor
@@ -42,7 +42,7 @@ pub fn obj_preprocess(input: &Mat) -> Mat {
 }
 
 //Postprocess YOLO boxes
-pub fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Vec<(f32, f32, f32, f32, usize, f32)> {
+pub fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Vec<(f32, f32, f32, f32, f32)> {
     const CXYWH_OFFSET: usize = 4; // cxcywh
     let preds = &xs[0];
     let anchor = preds.axis_iter(Axis(0)).enumerate().next().unwrap().1;
@@ -54,7 +54,7 @@ pub fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Ve
         .min(640 as f32 / height_original);
 
     // save each result
-    let mut data: Vec<(f32, f32, f32, f32, usize, f32)> = Vec::new();
+    let mut data: Vec<(f32, f32, f32, f32, f32)> = Vec::new();
     for pred in anchor.axis_iter(Axis(1)) {
         // split preds for different tasks
         let bbox = pred.slice(s![0..CXYWH_OFFSET]);
@@ -62,7 +62,7 @@ pub fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Ve
         //let rad = pred.slice(s![CXYWH_OFFSET + 1..CXYWH_OFFSET + 2 as usize]);
         
         // confidence and id
-        let (id, &confidence) = clss
+        let (_id, &confidence) = clss
             .into_iter()
             .enumerate()
             .reduce(|max, x| if x.1 > max.1 { x } else { max })
@@ -85,7 +85,6 @@ pub fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Ve
             y.max(0.0f32).min(height_original),
             w,
             h,
-            id,
             confidence,
         );
 
@@ -99,8 +98,8 @@ pub fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Ve
 }
 
 //Rotated NMS function
-fn nms(xs: &mut Vec<(f32, f32, f32, f32, usize, f32)>, iou_threshold: f32 ) {
-    xs.sort_by(|b1, b2| b2.5.partial_cmp(&b1.5).unwrap());
+fn nms(xs: &mut Vec<(f32, f32, f32, f32, f32)>, iou_threshold: f32 ) {
+    xs.sort_by(|b1, b2| b2.4.partial_cmp(&b1.4).unwrap());
 
     let mut current_index = 0;
     for index in 0..xs.len() {
