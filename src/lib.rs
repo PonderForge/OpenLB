@@ -1,49 +1,61 @@
-mod object;
-mod classifier;
+mod human_detector;
+mod img_classifier;
+mod text_classifier;
 
-use object::{detect_image, detect_warmup};
-use classifier::{classify_images, classify_warmup};
+use human_detector::{detect_humans, detect_humans_warmup};
+use img_classifier::{classify_images, classify_img_warmup};
+use text_classifier::{classify_text, classify_text_warmup};
 
 use opencv::imgcodecs::{IMREAD_UNCHANGED, imdecode};
 use opencv::core::*;
 use opencv::imgproc::*;
 
 use ort::{ExecutionProviderDispatch, GraphOptimizationLevel, Session};
+use tokenizers::Tokenizer;
+use std::str::FromStr;
 use std::time::Instant;
 #[cfg(feature = "bincode")]
 use bincode::{Encode, Decode};
 
 #[derive(Debug)]
-pub struct LBCleaner {
+pub struct ImgCleaner {
     detector: Session,
     classifier: Session,
-    human_thresholds: LBThresholds,
-    overall_thresholds: LBThresholds,
+    human_thresholds: ImgThresholds,
+    overall_thresholds: ImgThresholds,
+}
+
+#[derive(Debug)]
+
+pub struct TxtCleaner {
+    classifier: Session,
+    tokenizer: Tokenizer,
+    sentence_threshold: f32
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
-pub struct LBThresholds {
+pub struct ImgThresholds {
     pub sexy: f32,
     pub porn: f32,
     pub hentai: f32,
 }
 
-impl LBThresholds {
-    pub fn new (sexy_threshold: f32, porn_threshold: f32, hentai_threshold: f32) -> LBThresholds {
-        LBThresholds {sexy: sexy_threshold, porn: porn_threshold, hentai: hentai_threshold}
+impl ImgThresholds {
+    pub fn new (sexy_threshold: f32, porn_threshold: f32, hentai_threshold: f32) -> ImgThresholds {
+        ImgThresholds {sexy: sexy_threshold, porn: porn_threshold, hentai: hentai_threshold}
     }
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
-pub enum CleanLevel {
+pub enum ImgCleanLevel {
     Overall,
     Human
 }
 
-impl LBCleaner {
-    pub fn init_defaults() -> LBCleaner {
+impl ImgCleaner {
+    pub fn init_defaults() -> ImgCleaner {
         //Initialize Onnx Runtime
         let ort_init = ort::init().commit();
         if ort_init.is_err() {
@@ -51,13 +63,13 @@ impl LBCleaner {
         }
 
         //Load Models
-        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../detect.onnx")).unwrap();
-        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../classify.onnx")).unwrap();
-        let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-        LBCleaner { detector: detector, classifier: classifier, human_thresholds: thresholds, overall_thresholds: thresholds}
+        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../human_detector.onnx")).unwrap();
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../img_classifier.onnx")).unwrap();
+        let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
+        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: thresholds, overall_thresholds: thresholds}
     }
 
-    pub fn init(human_thresholds: LBThresholds, overall_thresholds: LBThresholds, exec_providers: ExecutionProviderDispatch) -> LBCleaner {
+    pub fn init(human_thresholds: ImgThresholds, overall_thresholds: ImgThresholds, exec_providers: ExecutionProviderDispatch) -> ImgCleaner {
         //Initialize Onnx Runtime
         let ort_init = ort::init()
         .with_execution_providers([exec_providers])
@@ -67,20 +79,20 @@ impl LBCleaner {
         }
 
         //Load Models
-        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../detect.onnx")).unwrap();
-        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../classify.onnx")).unwrap();
-        LBCleaner { detector: detector, classifier: classifier, human_thresholds: human_thresholds, overall_thresholds: overall_thresholds}
+        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../human_detector.onnx")).unwrap();
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../img_classifier.onnx")).unwrap();
+        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: human_thresholds, overall_thresholds: overall_thresholds}
     }
 
     pub fn warmup(&self, iters: u8) {
         //Warmup Models
         for _ in 0..iters {
-            detect_warmup(&self.detector);
-            classify_warmup(&self.classifier);
+            detect_humans_warmup(&self.detector);
+            classify_img_warmup(&self.classifier);
         }
     }
 
-    pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: CleanLevel) {
+    pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: ImgCleanLevel) {
         let input_img = &opencv::imgcodecs::imread(input_path, IMREAD_UNCHANGED).unwrap();
         let out = self.clean_mat(&input_img, level);
         if out.is_some() {
@@ -88,22 +100,22 @@ impl LBCleaner {
         }
     }
 
-    pub fn clean_mat(&self, input_img: &Mat, level: CleanLevel) -> Option<Mat> {
+    pub fn clean_mat(&self, input_img: &Mat, level: ImgCleanLevel) -> Option<Mat> {
         let mut exit_img = input_img.clone();
         let mut processed_for_ai = Mat::default();
         cvt_color_def(&input_img, &mut processed_for_ai, COLOR_BGRA2BGR).unwrap();
         let now = Instant::now();
         println!("Start Inference");
-        if level == CleanLevel::Overall {
+        if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &Vector::from_elem(processed_for_ai.clone(), 1));
             println!("Classify Time: {:?}", now.elapsed());
             if metric[0][4] > self.human_thresholds.sexy || metric[0][1] > self.human_thresholds.hentai || metric[0][3] > self.human_thresholds.porn {
-                return Some(create_overlay(exit_img.cols(), exit_img.rows(), Scalar::new( metric[0][3] as f64 * 200.0, metric[0][1] as f64 * 200.0, metric[0][4] as f64 * 200.0, 0.0), input_img.channels()));
+                return Some(Self::create_overlay(exit_img.cols(), exit_img.rows(), Scalar::new( metric[0][3] as f64 * 200.0, metric[0][1] as f64 * 200.0, metric[0][4] as f64 * 200.0, 0.0), input_img.channels()));
             }
-        } else if level == CleanLevel::Human {
+        } else if level == ImgCleanLevel::Human {
             let mut changed = false;
             //Run Human Detector and convert to Vector
-            let mut humans: Vec<(f32, f32, f32, f32, f32)> = detect_image(&self.detector, &processed_for_ai);
+            let mut humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &processed_for_ai);
             //Load Images into Vector
             let mut mats: Vector<Mat> = Vector::new();
             for human in &humans {
@@ -125,7 +137,7 @@ impl LBCleaner {
                         if humans[i].1 + humans[i].3 > exit_img.rows() as f32 {
                             humans[i].3 += exit_img.rows() as f32 - (humans[i].1 + humans[i].3);
                         }
-                        let overlay = create_overlay(humans[i].2 as i32, humans[i].3 as i32, Scalar::new( human_metrics[i][3] as f64 * 200.0, human_metrics[i][1] as f64 * 200.0, human_metrics[i][4] as f64 * 200.0, 0.0), input_img.channels());
+                        let overlay = Self::create_overlay(humans[i].2 as i32, humans[i].3 as i32, Scalar::new( human_metrics[i][3] as f64 * 200.0, human_metrics[i][1] as f64 * 200.0, human_metrics[i][4] as f64 * 200.0, 0.0), input_img.channels());
                         overlay.copy_to(&mut Mat::roi_mut(&mut exit_img, Rect_ { x: humans[i].0 as i32, y: humans[i].1 as i32, width: humans[i].2 as i32, height: humans[i].3 as i32}).unwrap()).unwrap();
                         changed = true;
                     }
@@ -206,38 +218,77 @@ impl LBCleaner {
             return None;
         }
     }
+    //Create Overlay for NSFW Content
+    fn create_overlay (width: i32, height: i32, color: Scalar, channels: i32) -> Mat {
+        let mut husk = Mat::zeros(64, 64, CV_8UC4).unwrap().to_mat().unwrap();
+        husk.set_to_def(&color).unwrap();
+        let icon = imdecode(include_bytes!("../icon.png"), IMREAD_UNCHANGED).unwrap();
+        let mut icon_layers: Vector<Mat> = Vector::new();
+        split(&icon, &mut icon_layers).unwrap();
+        icon.copy_to_masked(&mut husk.roi_mut(Rect_ { x: 16, y: 16, width: 32, height: 32 }).unwrap(), &icon_layers.get(3).unwrap()).unwrap();
+        let ratio = 64.0 / width.min(height) as f32;
+        let mut extended = Mat::default();
+        let extension = (((width.max(height)) as f32 * ratio)/2.0)as i32 -32;
+        if width > height {
+            copy_make_border(&husk, &mut extended, 0, 0, extension, extension, BORDER_CONSTANT, color).unwrap();
+        } else {
+            copy_make_border(&husk, &mut extended, extension, extension, 0, 0, BORDER_CONSTANT, color).unwrap();
+        }
+        if ratio != 1.0 {
+            let holder = extended.clone();
+            resize(&holder, &mut extended, Size::new(width, height), 0.0, 0.0, INTER_NEAREST).unwrap();
+        }
+        let mut mask = Mat::default();
+        if channels == 1 {
+            cvt_color_def(&extended, &mut mask, COLOR_BGRA2GRAY).unwrap();
+        } else if channels == 3 {
+            cvt_color_def(&extended, &mut mask, COLOR_BGRA2BGR).unwrap();
+        } else {
+            mask = extended.clone();
+        }
+        mask
+    }
 }
 
-//Create Overlay for NSFW Content
-fn create_overlay (width: i32, height: i32, color: Scalar, channels: i32) -> Mat {
-    let mut husk = Mat::zeros(64, 64, CV_8UC4).unwrap().to_mat().unwrap();
-    husk.set_to_def(&color).unwrap();
-    let icon = imdecode(include_bytes!("../icon.png"), IMREAD_UNCHANGED).unwrap();
-    let mut icon_layers: Vector<Mat> = Vector::new();
-    split(&icon, &mut icon_layers).unwrap();
-    icon.copy_to_masked(&mut husk.roi_mut(Rect_ { x: 16, y: 16, width: 32, height: 32 }).unwrap(), &icon_layers.get(3).unwrap()).unwrap();
-    let ratio = 64.0 / width.min(height) as f32;
-    let mut extended = Mat::default();
-    let extension = (((width.max(height)) as f32 * ratio)/2.0)as i32 -32;
-    if width > height {
-        copy_make_border(&husk, &mut extended, 0, 0, extension, extension, BORDER_CONSTANT, color).unwrap();
-    } else {
-        copy_make_border(&husk, &mut extended, extension, extension, 0, 0, BORDER_CONSTANT, color).unwrap();
+impl TxtCleaner {
+    pub fn init(threshold: Option<f32>) -> TxtCleaner {
+        //Initialize Onnx Runtime
+        let ort_init = ort::init().commit();
+        if ort_init.is_err() {
+            panic!("ONNX was not correctly initalized!");
+        }
+
+        //Load Models
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../text-classify.onnx")).unwrap();
+        let tokenizer: Tokenizer = Tokenizer::from_bytes(include_bytes!("../text-tokenizer.json")).unwrap();
+        TxtCleaner { classifier: classifier, sentence_threshold: threshold.unwrap_or_else(||{0.8}), tokenizer: tokenizer}
     }
-    if ratio != 1.0 {
-        let holder = extended.clone();
-        resize(&holder, &mut extended, Size::new(width, height), 0.0, 0.0, INTER_NEAREST).unwrap();
+
+    pub fn warmup(&self, iters: u8) {
+        //Warmup Models
+        for _ in 0..iters {
+            classify_text_warmup(&self.classifier);
+        }
     }
-    let mut mask = Mat::default();
-    if channels == 1 {
-        cvt_color_def(&extended, &mut mask, COLOR_BGRA2GRAY).unwrap();
-    } else if channels == 3 {
-        cvt_color_def(&extended, &mut mask, COLOR_BGRA2BGR).unwrap();
-    } else {
-        mask = extended.clone();
+
+    pub fn clean_string (&self, text: String) -> String {
+        let mut sentences: Vec<Vec<&str>> = text.split_inclusive(['.', '?', '!']).collect::<Vec<&str>>().chunks(100).collect::<Vec<&[&str]>>().iter().map(|&e| e.to_vec()).collect::<Vec<Vec<&str>>>();
+        for sentence_group in sentences.iter_mut() {
+            let ret = &classify_text(&self.classifier, &self.tokenizer, sentence_group.clone());
+            println!("{:?}", ret);
+            let mut removals = 0;
+            for i in 0..sentence_group.len() {
+                if ret[i][1] > self.sentence_threshold {
+                    sentence_group.remove(i - removals);
+                    removals += 1;
+                }
+            }
+        }
+        sentences.into_iter().flatten().collect::<Vec<&str>>().join("")
     }
-    mask
+
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -247,22 +298,31 @@ mod tests {
     
     #[test]
     fn clean_image() {
-        let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-        let cleaner = LBCleaner::init(thresholds, thresholds, CPUExecutionProvider::default().into());
+        let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
+        let cleaner = ImgCleaner::init(thresholds, thresholds, CPUExecutionProvider::default().into());
         cleaner.warmup(20);
-        let input_img = imread("test2.jpg", IMREAD_UNCHANGED).unwrap();
-        let out = cleaner.clean_mat(&input_img, CleanLevel::Human);
+        let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
+        let out = cleaner.clean_mat(&input_img, ImgCleanLevel::Human);
         if out.is_none() {
             panic!("No NSFW Content Detected");
         }
         let out = out.unwrap();
-        imwrite("out.png", &out, &opencv::core::Vector::new());
+        imwrite("out.png", &out, &opencv::core::Vector::new()).unwrap();
+    }
+
+    #[test]
+    fn clean_text() {
+        let txtcleaner = TxtCleaner::init(Some(0.6));
+        txtcleaner.warmup(20);
+        let now = Instant::now();
+        txtcleaner.clean_string(std::fs::read_to_string("0100021.txt").unwrap());
+        println!("Text Detect Time: {:?}", now.elapsed());
     }
 
     #[test]
     fn clean_folder() {
-        let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-        let cleaner = LBCleaner::init(thresholds, thresholds, CPUExecutionProvider::default().into());
+        let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
+        let cleaner = ImgCleaner::init(thresholds, thresholds, CPUExecutionProvider::default().into());
         cleaner.warmup(20);
         let paths = std::fs::read_dir("./ai_nsfw_test").unwrap();
         let mut i = 0;
@@ -271,7 +331,7 @@ mod tests {
             let path = p.as_os_str().to_str().unwrap();
             if path.ends_with("jpg") {
                 let input_img = imread(path, IMREAD_UNCHANGED).unwrap();
-                let out = cleaner.clean_mat(&input_img, CleanLevel::Human);
+                let out = cleaner.clean_mat(&input_img, ImgCleanLevel::Human);
                 if out.is_none() {
                     println!("No NSFW Content Detected");
                 } else {
@@ -286,13 +346,13 @@ mod tests {
 
     #[test]
     fn time_detection() {
-        let thresholds = LBThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-        let cleaner = LBCleaner::init(thresholds, thresholds, CPUExecutionProvider::default().into());
+        let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
+        let cleaner = ImgCleaner::init(thresholds, thresholds, CPUExecutionProvider::default().into());
         cleaner.warmup(20);
         let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
         let now = Instant::now();
         for _ in 0..50 {
-            cleaner.clean_mat(&input_img, CleanLevel::Human);
+            cleaner.clean_mat(&input_img, ImgCleanLevel::Human);
         }
         println!("Average Time: {:?}", now.elapsed() / 50);
     }

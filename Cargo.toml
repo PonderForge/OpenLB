@@ -12,6 +12,7 @@ ndarray = "0.16.1"
 bincode = { version = "2.0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 gif = { version = "0.13.1", optional = true }
+tokenizers = { version = "0.22.0", default-features = false, features = ["onig"] }
 
 [features]
 bincode=["dep:bincode"]
