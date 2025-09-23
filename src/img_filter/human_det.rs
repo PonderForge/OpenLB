@@ -2,10 +2,9 @@ use opencv::core::*;
 use opencv::imgproc::*;
 use opencv::dnn::*;
 use ndarray::{s, Array, Axis, IxDyn};
-use mbr::Mbr;
+use crate::img_filter::box_mbr::Mbr;
 use ort::{Session, inputs};
 
-pub mod mbr;
 
 pub fn detect_humans(detector: &Session, input_img: &Mat) -> Vec<(f32, f32, f32, f32, f32)> {
     //Convert Image to a Tensor
@@ -28,9 +27,9 @@ fn obj_preprocess(input: &Mat) -> Mat {
     let h1 = 640f32 * (input.rows() as f32/input.cols() as f32);
     let w1 = 640f32 * (input.cols() as f32/input.rows() as f32);
     if h1 <= 640f32 {
-        resize( input, &mut output, opencv::core::Size_::new(640, h1 as i32), 0.0, 0.0, INTER_LINEAR);
+        resize( input, &mut output, opencv::core::Size_::new(640, h1 as i32), 0.0, 0.0, INTER_LINEAR).unwrap();
     } else {
-        resize( input, &mut output, opencv::core::Size_::new(w1 as i32, 640), 0.0, 0.0, INTER_LINEAR);
+        resize( input, &mut output, opencv::core::Size_::new(w1 as i32, 640), 0.0, 0.0, INTER_LINEAR).unwrap();
     }
 
     let top = (640-output.rows()) / 2;
@@ -38,7 +37,7 @@ fn obj_preprocess(input: &Mat) -> Mat {
     let left = (640- output.cols()) / 2;
     let right = (640 - output.cols()+1) / 2;
     let mut out: Mat = Mat::default();
-    copy_make_border(&output, &mut out, top, down, left, right, BORDER_CONSTANT, opencv::core::Scalar::new(144.0, 144.0, 144.0, 0.0) );
+    copy_make_border(&output, &mut out, top, down, left, right, BORDER_CONSTANT, opencv::core::Scalar::new(144.0, 144.0, 144.0, 0.0)).unwrap();
     blob_from_image(&out, 1f64/255f64, Size::new(640, 640), Scalar::new(0.0,0.0,0.0,0.0), true, false, CV_32F).unwrap()
 }
 

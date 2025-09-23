@@ -1,4 +1,4 @@
-use geo::{coord, line_string, Area, BooleanOps, Coord, LineString, Polygon};
+use geo::{coord, line_string, Area, BooleanOps, LineString, Polygon};
 
 /// Minimum Bounding Rectangle.
 #[derive(Clone, PartialEq)]

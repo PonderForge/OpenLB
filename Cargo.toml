@@ -4,16 +4,23 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-opencv = {version = "=0.93.4", default-features = false , features = ["imgcodecs", "imgproc", "dnn"]}
+opencv = {version = "=0.93.4", default-features = false , features = ["imgcodecs", "imgproc", "dnn"], optional = true }
 ort = { version = "=2.0.0-rc.8", features = ["cuda", "load-dynamic", "tensorrt"]}
 ort-sys = "=2.0.0-rc.8"
-geo = "0.29.3"
+geo = { version = "0.29.3", optional = true }
 ndarray = "0.16.1"
 bincode = { version = "2.0.1", optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 gif = { version = "0.13.1", optional = true }
-tokenizers = { version = "0.22.0", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.22.0", default-features = false, features = ["onig"], optional = true }
+pyo3 = { version = "0.26.0", features = ["extension-module"] }
 
 [features]
+default = ["image_scan", "text_scan"]
 bincode=["dep:bincode"]
 gif=["dep:gif"]
+image_scan = ["dep:opencv", "dep:geo"]
+text_scan = ["dep:tokenizers"]
+
+[lib]
+name = "pyopenlb"
+crate-type = ["cdylib"]

@@ -1,4 +1,5 @@
 /target
-/ai_nsfw_test
-/out
-/diffuse.py
+/out.png
+/test.jpg
+/test.txt
+/.env
