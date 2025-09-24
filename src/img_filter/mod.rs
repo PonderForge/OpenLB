@@ -5,7 +5,6 @@ mod box_mbr;
 use opencv::imgcodecs::{IMREAD_UNCHANGED, imdecode};
 use opencv::core::*;
 use opencv::imgproc::*;
-use std::time::Instant;
 
 use classifier::{classify_images, classify_img_warmup};
 use human_det::{detect_humans, detect_humans_warmup};
@@ -81,11 +80,8 @@ impl ImgCleaner {
         let mut exit_img = input_img.clone();
         let mut processed_for_ai = Mat::default();
         cvt_color_def(&input_img, &mut processed_for_ai, COLOR_BGRA2BGR).unwrap();
-        let now = Instant::now();
-        println!("Start Inference");
         if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &Vector::from_elem(processed_for_ai.clone(), 1));
-            println!("Classify Time: {:?}", now.elapsed());
             if metric[0][4] > self.human_thresholds.sexy || metric[0][1] > self.human_thresholds.hentai || metric[0][3] > self.human_thresholds.porn {
                 return Some(Self::create_overlay(exit_img.cols(), exit_img.rows(), Scalar::new( metric[0][3] as f64 * 200.0, metric[0][1] as f64 * 200.0, metric[0][4] as f64 * 200.0, 0.0), input_img.channels()));
             }
@@ -100,11 +96,8 @@ impl ImgCleaner {
                 get_rect_sub_pix_def(&processed_for_ai, Size::new(human.2 as i32, human.3 as i32), Point2f::new(human.0 + (human.2/2.0), human.1 + (human.3/2.0)), &mut cropped).unwrap();
                 mats.push(cropped);
             }
-            println!("Human Detect Time: {:?}", now.elapsed());
             if !humans.is_empty() {
-                let now2 = Instant::now();
                 let human_metrics = classify_images(&self.classifier, &mats);
-                println!("Human Classify Time: {:?}", now2.elapsed());
                 for i in 0..humans.len() {
                     //rectangle(&mut exit_img, Rect::from_point_size(Point::new(humans[i].0 as i32, humans[i].1 as i32), Size::new(humans[i].2 as i32 - 5, humans[i].3 as i32 - 5)), Scalar::new(human_metrics[i][1] as f64 * 255.0, 0.0, 0.0, 0.0), -1, LINE_8, 0);
                     if human_metrics[i][4] > self.overall_thresholds.sexy || human_metrics[i][1] > self.overall_thresholds.hentai || human_metrics[i][3] > self.overall_thresholds.porn {
@@ -119,7 +112,6 @@ impl ImgCleaner {
                         changed = true;
                     }
                 }
-                println!("Human Filter Time: {:?}", now.elapsed());
             }
             if changed {
                 return Some(exit_img);
@@ -128,6 +120,33 @@ impl ImgCleaner {
             }
         }
         return None;
+    }
+
+    pub fn classify_mat(&self, input_img: &Mat, level: ImgCleanLevel) -> Vec<(Vec<f32>, Option<(f32, f32, f32, f32, f32)>)> {
+
+        let mut results: Vec<(Vec<f32>, Option<(f32, f32, f32, f32, f32)>)> = Vec::new();
+        let mut processed_for_ai = Mat::default();
+        cvt_color_def(&input_img, &mut processed_for_ai, COLOR_BGRA2BGR).unwrap();
+        if level == ImgCleanLevel::Overall {
+            results.push((classify_images(&self.classifier, &Vector::from_elem(processed_for_ai.clone(), 1))[0].clone(), None));
+        } else if level == ImgCleanLevel::Human {
+            //Run Human Detector and convert to Vector
+            let humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &processed_for_ai);
+            //Load Images into Vector
+            let mut mats: Vector<Mat> = Vector::new();
+            for human in &humans {
+                let mut cropped: Mat = Mat::default();
+                get_rect_sub_pix_def(&processed_for_ai, Size::new(human.2 as i32, human.3 as i32), Point2f::new(human.0 + (human.2/2.0), human.1 + (human.3/2.0)), &mut cropped).unwrap();
+                mats.push(cropped);
+            }
+            if !humans.is_empty() {
+                let mut human_metrics = classify_images(&self.classifier, &mats);
+                for i in humans {
+                    results.push((human_metrics.remove(0), Some(i)));
+                }
+            }
+        }
+        results
     }
 
     #[cfg(feature = "gif")]

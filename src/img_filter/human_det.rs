@@ -33,9 +33,9 @@ fn obj_preprocess(input: &Mat) -> Mat {
     }
 
     let top = (640-output.rows()) / 2;
-    let down = (640-output.rows()+1) / 2;
+    let down = (641-output.rows()) / 2;
     let left = (640- output.cols()) / 2;
-    let right = (640 - output.cols()+1) / 2;
+    let right = (641 - output.cols()) / 2;
     let mut out: Mat = Mat::default();
     copy_make_border(&output, &mut out, top, down, left, right, BORDER_CONSTANT, opencv::core::Scalar::new(144.0, 144.0, 144.0, 0.0)).unwrap();
     blob_from_image(&out, 1f64/255f64, Size::new(640, 640), Scalar::new(0.0,0.0,0.0,0.0), true, false, CV_32F).unwrap()
@@ -81,8 +81,8 @@ fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Vec<(f
         let x = (cx - w / 2.) - ((square_max-width_original)/2.0);
         let y = (cy - h / 2.) - ((square_max-height_original)/2.0);
         let y_bbox = (
-            x.max(0.0f32).min(width_original),
-            y.max(0.0f32).min(height_original),
+            x.max(0f32).min(width_original),
+            y.max(0f32).min(height_original),
             w,
             h,
             confidence,

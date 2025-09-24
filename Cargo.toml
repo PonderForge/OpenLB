@@ -12,7 +12,6 @@ ndarray = "0.16.1"
 bincode = { version = "2.0.1", optional = true }
 gif = { version = "0.13.1", optional = true }
 tokenizers = { version = "0.22.0", default-features = false, features = ["onig"], optional = true }
-pyo3 = { version = "0.26.0", features = ["extension-module"] }
 
 [features]
 default = ["image_scan", "text_scan"]
@@ -20,7 +19,3 @@ bincode=["dep:bincode"]
 gif=["dep:gif"]
 image_scan = ["dep:opencv", "dep:geo"]
 text_scan = ["dep:tokenizers"]
-
-[lib]
-name = "pyopenlb"
-crate-type = ["cdylib"]
