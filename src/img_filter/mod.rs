@@ -52,20 +52,15 @@ impl ImgCleaner {
         if ort_init.is_err() {
             panic!("ONNX was not correctly initalized!");
         }
-
         //Load Models
         let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
         let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/human_detector.onnx")).unwrap();
         let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/img_classifier.onnx")).unwrap();
-        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: human_thresholds.unwrap_or_else(||{thresholds}), overall_thresholds: overall_thresholds.unwrap_or_else(||{thresholds})}
-    }
-
-    pub fn warmup(&self, iters: u8) {
-        //Warmup Models
-        for _ in 0..iters {
-            detect_humans_warmup(&self.detector);
-            classify_img_warmup(&self.classifier);
+        for _ in 0..10 {
+            detect_humans_warmup(&detector);
+            classify_img_warmup(&classifier);
         }
+        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: human_thresholds.unwrap_or_else(||{thresholds}), overall_thresholds: overall_thresholds.unwrap_or_else(||{thresholds})}
     }
 
     pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: ImgCleanLevel) {

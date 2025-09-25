@@ -25,14 +25,10 @@ impl TxtCleaner {
         //Load Models
         let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/text_classify.onnx")).unwrap();
         let tokenizer: Tokenizer = Tokenizer::from_bytes(include_bytes!("../../models/text_tokenizer.json")).unwrap();
-        TxtCleaner { classifier: classifier, sentence_threshold: threshold.unwrap_or_else(||{0.8}), tokenizer: tokenizer}
-    }
-
-    pub fn warmup(&self, iters: u8) {
-        //Warmup Models
-        for _ in 0..iters {
-            classify_string_warmup(&self.classifier);
+        for _ in 0..20 {
+            classify_string_warmup(&classifier);
         }
+        TxtCleaner { classifier: classifier, sentence_threshold: threshold.unwrap_or_else(||{0.8}), tokenizer: tokenizer}
     }
 
     pub fn clean_text<S: AsRef<str>>(&self, text: S) -> String {
@@ -42,6 +38,7 @@ impl TxtCleaner {
             let mut removals = 0;
             for i in 0..sentence_group.len() {
                 if ret[i][1] > self.sentence_threshold {
+                    println!("{:?}", sentence_group[i - removals]);
                     sentence_group.remove(i - removals);
                     removals += 1;
                 }
