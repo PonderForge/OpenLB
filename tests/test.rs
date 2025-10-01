@@ -1,16 +1,14 @@
 use opencv::imgcodecs::{imwrite, imread, IMREAD_UNCHANGED};
-use ort::CPUExecutionProvider;
 #[cfg(feature = "text_scan")]
 use openlb::text_filter::TxtCleaner;
 use std::time::Instant;
 #[cfg(feature = "image_scan")]
-use openlb::img_filter::{ImgCleanLevel, ImgCleaner, ImgThresholds};
+use openlb::img_filter::{ImgCleanLevel, ImgCleaner};
 
 #[test]
 #[cfg(feature = "image_scan")]
 fn clean_image() {
-    let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-    let cleaner = ImgCleaner::init(Some(thresholds), Some(thresholds), Some(CPUExecutionProvider::default().into()));
+    let cleaner = ImgCleaner::builder().commit();
     let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
     let out = cleaner.clean_mat(&input_img, ImgCleanLevel::Human);
     if out.is_none() {
@@ -23,17 +21,16 @@ fn clean_image() {
 #[test]
 #[cfg(feature = "text_scan")]
 fn clean_text() {
-    let txtcleaner = TxtCleaner::init(Some(0.95), Some(ort::CPUExecutionProvider::default().into()));
+    let txtcleaner = TxtCleaner::builder().commit();
     let now = Instant::now();
-    txtcleaner.clean_text(std::fs::read_to_string("test.txt").unwrap());
+    std::fs::write("out.txt", txtcleaner.clean_text(std::fs::read_to_string("test.txt").unwrap()));
     println!("Text Detect Time: {:?}", now.elapsed());
 }
 
 #[test]
 #[cfg(feature = "image_scan")]
 fn clean_folder() {
-    let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-    let cleaner = ImgCleaner::init(Some(thresholds), Some(thresholds), Some(CPUExecutionProvider::default().into()));
+    let cleaner = ImgCleaner::builder().commit();
     let paths = std::fs::read_dir("./ai_nsfw_test").unwrap();
     let mut i = 0;
     for path in paths {
@@ -57,8 +54,7 @@ fn clean_folder() {
 #[test]
 #[cfg(feature = "image_scan")]
 fn image_time() {
-    let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-    let cleaner = ImgCleaner::init(Some(thresholds), Some(thresholds), Some(ort::CPUExecutionProvider::default().into()));
+    let cleaner = ImgCleaner::builder().commit();
     let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
     let now = Instant::now();
     for _ in 0..50 {
@@ -70,7 +66,7 @@ fn image_time() {
 #[test]
 #[cfg(feature = "text_scan")]
 fn text_time() {
-    let txtcleaner = TxtCleaner::init(Some(0.6), Some(ort::CPUExecutionProvider::default().into()));
+    let txtcleaner = TxtCleaner::builder().commit();
     let text: String = "Hello I like trains!".to_string();
     let now = Instant::now();
     for _ in 0..50 {

@@ -13,14 +13,7 @@ use human_det::{detect_humans, detect_humans_warmup};
 use bincode::{Encode, Decode};
 use ort::{ExecutionProviderDispatch, GraphOptimizationLevel, Session};
 
-#[derive(Debug)]
-pub struct ImgCleaner {
-    detector: Session,
-    classifier: Session,
-    human_thresholds: ImgThresholds,
-    overall_thresholds: ImgThresholds,
-}
-
+// Cut off point for NSFW images in one place
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
 pub struct ImgThresholds {
@@ -35,6 +28,7 @@ impl ImgThresholds {
     }
 }
 
+// Image Cleaner Level
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
 pub enum ImgCleanLevel {
@@ -42,25 +36,60 @@ pub enum ImgCleanLevel {
     Human
 }
 
-impl ImgCleaner {
+// Image Cleaner Builder for All the Options
+pub struct ImgCleanerBuilder {
+    human_thresholds: ImgThresholds,
+    overall_thresholds: ImgThresholds,
+    exec_provider: ExecutionProviderDispatch
+}
 
-    pub fn init(human_thresholds: Option<ImgThresholds>, overall_thresholds: Option<ImgThresholds>, exec_providers: Option<ExecutionProviderDispatch>) -> ImgCleaner {
-        //Initialize Onnx Runtime
+impl ImgCleanerBuilder {
+    pub fn with_human_thres (mut self, human_thres: ImgThresholds) -> ImgCleanerBuilder {
+        self.human_thresholds = human_thres;
+        self
+    }
+
+    pub fn with_overall_thres (mut self, overall_thres: ImgThresholds) -> ImgCleanerBuilder {
+        self.overall_thresholds = overall_thres;
+        self
+    }
+
+    pub fn with_exec_provider (mut self, provider: ExecutionProviderDispatch) -> ImgCleanerBuilder {
+        self.exec_provider = provider;
+        self
+    }
+
+    pub fn commit (self) -> ImgCleaner {
         let ort_init = ort::init()
-        .with_execution_providers([exec_providers.unwrap_or_else(||{ort::CPUExecutionProvider::default().into()})])
+        .with_execution_providers([self.exec_provider])
         .commit();
         if ort_init.is_err() {
             panic!("ONNX was not correctly initalized!");
         }
         //Load Models
-        let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
         let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/human_detector.onnx")).unwrap();
         let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/img_classifier.onnx")).unwrap();
         for _ in 0..10 {
             detect_humans_warmup(&detector);
             classify_img_warmup(&classifier);
         }
-        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: human_thresholds.unwrap_or_else(||{thresholds}), overall_thresholds: overall_thresholds.unwrap_or_else(||{thresholds})}
+        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: self.human_thresholds, overall_thresholds: self.overall_thresholds}
+    }
+}
+
+// Main Image Cleaner Struct
+#[derive(Debug)]
+pub struct ImgCleaner {
+    detector: Session,
+    classifier: Session,
+    human_thresholds: ImgThresholds,
+    overall_thresholds: ImgThresholds,
+}
+
+impl ImgCleaner {
+    pub fn builder() -> ImgCleanerBuilder {
+        let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
+        ImgCleanerBuilder {human_thresholds: thresholds, overall_thresholds: thresholds, exec_provider: ort::CPUExecutionProvider::default().into()}
     }
 
     pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: ImgCleanLevel) {

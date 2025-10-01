@@ -1,8 +1,6 @@
-use ort::CPUExecutionProvider;
-use openlb::img_filter::{ImgCleanLevel, ImgCleaner, ImgThresholds};
+use openlb::img_filter::{ImgCleanLevel, ImgCleaner};
 
 fn main () {
-    let thresholds = ImgThresholds { sexy: 0.27, porn: 0.74, hentai: 0.5 };
-    let cleaner = ImgCleaner::init(Some(thresholds), Some(thresholds), Some(CPUExecutionProvider::default().into()));
+    let cleaner = ImgCleaner::builder().commit();
     cleaner.clean_file_path("test.jpg", "out.jpg", ImgCleanLevel::Overall);
 }

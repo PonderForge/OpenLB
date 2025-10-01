@@ -4,18 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-opencv = {version = "=0.93.4", default-features = false , features = ["imgcodecs", "imgproc", "dnn"], optional = true }
+opencv = {version = "=0.93.4", default-features = false, features = ["imgcodecs", "imgproc", "dnn"], optional = true }
 ort = { version = "=2.0.0-rc.8", features = ["cuda", "load-dynamic", "tensorrt"]}
 ort-sys = "=2.0.0-rc.8"
 geo = { version = "0.29.3", optional = true }
 ndarray = "0.16.1"
 bincode = { version = "2.0.1", optional = true }
 gif = { version = "0.13.1", optional = true }
-tokenizers = { version = "0.22.0", default-features = false, features = ["onig"], optional = true }
+tokenizers = { version = "0.22.0", default-features = false, features = ["fancy-regex"], optional = true }
+fancy-regex = { version = "0.16.2", optional = true }
 
 [features]
 default = ["image_scan", "text_scan"]
 bincode=["dep:bincode"]
 gif=["dep:gif"]
 image_scan = ["dep:opencv", "dep:geo"]
-text_scan = ["dep:tokenizers"]
+text_scan = ["dep:tokenizers", "dep:fancy-regex"]

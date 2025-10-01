@@ -5,19 +5,25 @@ use classifier::{classify_string, classify_string_warmup};
 use ort::{ExecutionProviderDispatch, GraphOptimizationLevel, Session};
 use tokenizers::Tokenizer;
 
-#[derive(Debug)]
-#[cfg(feature = "text_scan")]
-pub struct TxtCleaner {
-    classifier: Session,
-    tokenizer: Tokenizer,
-    sentence_threshold: f32
+use fancy_regex::Regex;
+pub struct TxtCleanerBuilder {
+    sentence_threshold: f32,
+    exec_provider: ExecutionProviderDispatch
 }
 
-#[cfg(feature = "text_scan")]
-impl TxtCleaner {
-    pub fn init(threshold: Option<f32>, exec_providers: Option<ExecutionProviderDispatch>) -> TxtCleaner {
-        //Initialize Onnx Runtime
-        let ort_init = ort::init().with_execution_providers([exec_providers.unwrap_or_else(||{ort::CPUExecutionProvider::default().into()})]).commit();
+impl TxtCleanerBuilder {
+    pub fn with_sentence_thres (mut self, threshold: f32) -> TxtCleanerBuilder {
+        self.sentence_threshold = threshold;
+        self
+    }
+
+    pub fn with_exec_provider (mut self, provider: ExecutionProviderDispatch) -> TxtCleanerBuilder {
+        self.exec_provider = provider;
+        self
+    }
+
+    pub fn commit (self) -> TxtCleaner {
+        let ort_init = ort::init().with_execution_providers([self.exec_provider]).commit();
         if ort_init.is_err() {
             panic!("ONNX was not correctly initalized!");
         }
@@ -28,11 +34,26 @@ impl TxtCleaner {
         for _ in 0..20 {
             classify_string_warmup(&classifier);
         }
-        TxtCleaner { classifier: classifier, sentence_threshold: threshold.unwrap_or_else(||{0.8}), tokenizer: tokenizer}
+        let re = Regex::new(r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s").unwrap();
+        TxtCleaner { classifier: classifier, sentence_threshold: self.sentence_threshold, tokenizer: tokenizer, sentence_seperator: re}
+    }
+}
+#[derive(Debug)]
+pub struct TxtCleaner {
+    classifier: Session,
+    tokenizer: Tokenizer,
+    sentence_threshold: f32,
+    sentence_seperator: Regex
+}
+
+impl TxtCleaner {
+
+    pub fn builder() -> TxtCleanerBuilder {
+        TxtCleanerBuilder {sentence_threshold: 0.8, exec_provider: ort::CPUExecutionProvider::default().into()}
     }
 
     pub fn clean_text<S: AsRef<str>>(&self, text: S) -> String {
-        let mut sentences: Vec<Vec<&str>> = text.as_ref().split_inclusive(['.', '?', '!']).collect::<Vec<&str>>().chunks(100).collect::<Vec<&[&str]>>().iter().map(|&e| e.to_vec()).collect::<Vec<Vec<&str>>>();
+        let mut sentences: Vec<Vec<&str>> = self.sentence_seperator.split(text.as_ref()).map(|x| x.unwrap()).collect::<Vec<&str>>().chunks(100).collect::<Vec<&[&str]>>().iter().map(|&e| e.to_vec()).collect::<Vec<Vec<&str>>>();
         for sentence_group in sentences.iter_mut() {
             let ret = &classify_string(&self.classifier, &self.tokenizer, sentence_group.clone());
             let mut removals = 0;
@@ -48,7 +69,7 @@ impl TxtCleaner {
     }
 
     pub fn classify_text<S: AsRef<str>>(&self, text: S) -> Vec<Vec<f32>> {
-        let mut sentences: Vec<Vec<&str>> = text.as_ref().split_inclusive(['.', '?', '!']).collect::<Vec<&str>>().chunks(100).collect::<Vec<&[&str]>>().iter().map(|&e| e.to_vec()).collect::<Vec<Vec<&str>>>();
+        let mut sentences: Vec<Vec<&str>> = self.sentence_seperator.split(text.as_ref()).map(|x| x.unwrap()).collect::<Vec<&str>>().chunks(100).collect::<Vec<&[&str]>>().iter().map(|&e| e.to_vec()).collect::<Vec<Vec<&str>>>();
         let mut returns: Vec<Vec<f32>> = Vec::new();
         for sentence_group in sentences.iter_mut() {
             let mut ret = classify_string(&self.classifier, &self.tokenizer, sentence_group.clone());
