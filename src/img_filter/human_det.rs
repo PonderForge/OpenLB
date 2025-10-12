@@ -1,14 +1,20 @@
-use opencv::core::*;
-use opencv::imgproc::*;
-use opencv::dnn::*;
+use fast_image_resize::Resizer;
+use image::imageops::overlay;
+use image::ImageBuffer;
+use image::Rgb;
+use ndarray::ArrayBase;
+use ndarray::Dim;
+use ndarray::OwnedRepr;
 use ndarray::{s, Array, Axis, IxDyn};
 use crate::img_filter::box_mbr::Mbr;
 use ort::{Session, inputs};
+use image::DynamicImage;
+use nshare::AsNdarray3;
+use fast_image_resize::ResizeOptions;
 
-
-pub fn detect_humans(detector: &Session, input_img: &Mat) -> Vec<(f32, f32, f32, f32, f32)> {
+pub fn detect_humans(detector: &Session, input_img: &DynamicImage, resize_options: &ResizeOptions) -> Vec<(f32, f32, f32, f32, f32)> {
     //Convert Image to a Tensor
-    let input_tensor = ort::Tensor::from_array(([1usize,3,640,640], obj_preprocess(&input_img).data_typed::<f32>().unwrap())).unwrap();
+    let input_tensor = ort::Tensor::from_array(obj_preprocess(&input_img, &resize_options)).unwrap();
     //Run the Human Detector (YOLOv11) on the Image Tensor
     let output_tensor = detector.run(inputs!["images" => input_tensor].unwrap()).unwrap();
     let outputs = output_tensor["output0"].try_extract_tensor::<f32>().unwrap().into_owned();
@@ -20,36 +26,36 @@ pub fn detect_humans_warmup (detector: &Session) {
     let _ = detector.run(inputs!["images" => input_tensor].unwrap()).unwrap();
 }
 
-//Preprocess YOLO image for inference
-fn obj_preprocess(input: &Mat) -> Mat {
-    let mut output: Mat = Mat::default();
 
-    let h1 = 640f32 * (input.rows() as f32/input.cols() as f32);
-    let w1 = 640f32 * (input.cols() as f32/input.rows() as f32);
+fn obj_preprocess(input: &DynamicImage, resize_options: &ResizeOptions) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+    let h1 = 640f32 * (input.height() as f32/input.width() as f32);
+    let w1 = 640f32 * (input.width() as f32/input.height() as f32);
+    let mut dst_image = DynamicImage::new_rgb8(1, 1);
+    let mut husk = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(640, 640, Rgb([143u8, 143u8, 143u8])));
+    let mut resizer = Resizer::new();
+    let mut x1 = 0f32;
+    let mut y1 = 0f32;
     if h1 <= 640f32 {
-        resize( input, &mut output, opencv::core::Size_::new(640, h1 as i32), 0.0, 0.0, INTER_LINEAR).unwrap();
+        dst_image = DynamicImage::new(640, h1 as u32, input.color());
+        y1 = (640f32 - h1) / 2f32;
     } else {
-        resize( input, &mut output, opencv::core::Size_::new(w1 as i32, 640), 0.0, 0.0, INTER_LINEAR).unwrap();
+        dst_image = DynamicImage::new(w1 as u32, 640, input.color());
+        x1 = (640f32 - w1) / 2f32;
     }
-
-    let top = (640-output.rows()) / 2;
-    let down = (641-output.rows()) / 2;
-    let left = (640- output.cols()) / 2;
-    let right = (641 - output.cols()) / 2;
-    let mut out: Mat = Mat::default();
-    copy_make_border(&output, &mut out, top, down, left, right, BORDER_CONSTANT, opencv::core::Scalar::new(144.0, 144.0, 144.0, 0.0)).unwrap();
-    blob_from_image(&out, 1f64/255f64, Size::new(640, 640), Scalar::new(0.0,0.0,0.0,0.0), true, false, CV_32F).unwrap()
+    resizer.resize(input, &mut dst_image, Some(resize_options)).unwrap();
+    overlay(&mut husk, &dst_image, x1 as i64, y1 as i64);
+    let array = husk.to_rgb32f().as_ndarray3().to_owned();
+    array.insert_axis(Axis(0))
 }
 
-//Postprocess YOLO boxes
-fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &Mat, conf: f32 ) -> Vec<(f32, f32, f32, f32, f32)> {
+fn obj_postprocess( xs: Vec<Array<f32, IxDyn>>, xs0: &DynamicImage, conf: f32 ) -> Vec<(f32, f32, f32, f32, f32)> {
     const CXYWH_OFFSET: usize = 4; // cxcywh
     let preds = &xs[0];
     let anchor = preds.axis_iter(Axis(0)).enumerate().next().unwrap().1;
     // [bs, 4 + nc + nm, anchors]
     // input image
-    let width_original = xs0.cols() as f32;
-    let height_original = xs0.rows() as f32;
+    let width_original = xs0.width() as f32;
+    let height_original = xs0.height() as f32;
     let ratio = (640 as f32 / width_original)
         .min(640 as f32 / height_original);
 

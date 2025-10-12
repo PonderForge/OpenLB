@@ -1,18 +1,20 @@
-use std::f32::consts::E;
-
-use opencv::core::*;
-use opencv::dnn::*;
+use fast_image_resize::ResizeOptions;
+use image::DynamicImage;
+use ndarray::{concatenate, s, ArrayBase, ArrayD, Axis, Dim, OwnedRepr};
+use nshare::AsNdarray3;
 use ort::{inputs, Session, SessionOutputs};
+use fast_image_resize::Resizer;
 
 //Runs NSFW Classification on a image or part of image
-pub fn classify_images (model: &Session, image: &Vector<Mat>) -> Vec<Vec<f32>> {
-    //Reformat Image to Classifer Model Input
-    let resized_img: Mat = blob_from_images_with_params(&image, Image2BlobParams::new(Scalar::new(0.0171247538317,0.0175070028011,0.0174291938998,0.0), Size::new(384, 384), Scalar::new(123.675, 116.28, 103.53, 0.0), true, CV_32F, DataLayout::DNN_LAYOUT_NCHW, ImagePaddingMode::DNN_PMODE_NULL, VecN::from_array([0.0,0.0,0.0,0.0])).unwrap()).unwrap();
-    let input_tensor = ort::Tensor::from_array(([image.len() as usize,3,384,384], resized_img.data_typed::<f32>().unwrap())).unwrap();
-    //Perform Inference
+pub fn classify_images(model: &Session, input_images: &Vec<DynamicImage>, resize_options: &ResizeOptions)  -> ArrayD<f32>{
+    let mut img_iter = input_images.iter();
+    let mut array = image_process(img_iter.next().unwrap(), resize_options);
+    for img in img_iter {
+        array = concatenate(Axis(0), &[array.view(), image_process(img, resize_options).view()]).unwrap();
+    }
+    let input_tensor = ort::Tensor::from_array(array).unwrap();
     let output_tensor: SessionOutputs = model.run(inputs!["input" => input_tensor].unwrap()).unwrap();
-    let outputs = output_tensor["output"].try_extract_tensor::<f32>().unwrap().into_owned();
-    return outputs.into_raw_vec_and_offset().0.chunks(5).collect::<Vec<&[f32]>>().iter().map(|&e| softmax(e.to_vec())).collect::<Vec<Vec<f32>>>();
+    return output_tensor["output"].try_extract_tensor::<f32>().unwrap().to_owned();
 }
 
 pub fn classify_img_warmup (model: &Session) {
@@ -20,18 +22,20 @@ pub fn classify_img_warmup (model: &Session) {
     let _ = model.run(inputs!["input" => input_tensor].unwrap()).unwrap();
 }
 
-fn softmax(array: Vec<f32>) -> Vec<f32> {
-    let mut softmax_array = array;
-
-    for value in &mut softmax_array {
-        *value = E.powf(*value);
-    }
-
-    let sum: f32 = softmax_array.iter().sum();
-
-    for value in &mut softmax_array {
-        *value /= sum;
-    }
-
-    softmax_array
+fn image_process (input: &DynamicImage, resize_options: &ResizeOptions) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
+    let mut dst_image = DynamicImage::new(384, 384, input.color());
+    let mut resizer = Resizer::new();
+    resizer.resize(input, &mut dst_image, Some(resize_options)).unwrap();
+    let image = dst_image.into_rgb32f();
+    let mut array = image.as_ndarray3().to_owned();
+    let mut r = array.slice_mut(s![0,..,..]);
+    r -= 0.485;
+    r /= 0.229;
+    let mut b = array.slice_mut(s![1,..,..]);
+    b -= 0.456;
+    b /= 0.224;
+    let mut g = array.slice_mut(s![2,..,..]);
+    g -= 0.406;
+    g /= 0.225;
+    array.insert_axis(Axis(0))
 }

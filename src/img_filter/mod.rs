@@ -1,13 +1,16 @@
 mod human_det;
-mod classifier;
+pub mod classifier;
 mod box_mbr;
 
-use opencv::imgcodecs::{IMREAD_UNCHANGED, imdecode};
-use opencv::core::*;
-use opencv::imgproc::*;
+use std::io::Cursor;
 
-use classifier::{classify_images, classify_img_warmup};
-use human_det::{detect_humans, detect_humans_warmup};
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+use image::imageops::overlay;
+use image::{ColorType, DynamicImage, GenericImage, ImageBuffer, ImageReader, Pixel, Rgb};
+use ndarray::{s, ArrayBase, Dim, OwnedRepr};
+
+use classifier::{classify_img_warmup, classify_images};
+use human_det::{detect_humans_warmup, detect_humans};
 
 #[cfg(feature = "bincode")]
 use bincode::{Encode, Decode};
@@ -68,12 +71,15 @@ impl ImgCleanerBuilder {
         }
         //Load Models
         let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/human_detector.onnx")).unwrap();
-        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/img_classifier.onnx")).unwrap();
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/img_classifier_quant.onnx")).unwrap();
         for _ in 0..10 {
             detect_humans_warmup(&detector);
             classify_img_warmup(&classifier);
         }
-        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: self.human_thresholds, overall_thresholds: self.overall_thresholds}
+        let resize_options = ResizeOptions::new()
+            .resize_alg(ResizeAlg::Convolution(FilterType::CatmullRom))
+            .use_alpha(false);
+        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: self.human_thresholds, overall_thresholds: self.overall_thresholds, resize_options: resize_options}
     }
 }
 
@@ -84,6 +90,7 @@ pub struct ImgCleaner {
     classifier: Session,
     human_thresholds: ImgThresholds,
     overall_thresholds: ImgThresholds,
+    resize_options: ResizeOptions
 }
 
 impl ImgCleaner {
@@ -93,46 +100,40 @@ impl ImgCleaner {
     }
 
     pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: ImgCleanLevel) {
-        let input_img = &opencv::imgcodecs::imread(input_path, IMREAD_UNCHANGED).unwrap();
-        let out = self.clean_mat(&input_img, level);
+        let out = self.clean_image(image::open(input_path).unwrap(), level);
         if out.is_some() {
-            opencv::imgcodecs::imwrite(output_path, &out.unwrap(), &opencv::core::Vector::new()).unwrap();
+            out.unwrap().save(output_path).unwrap();
         }
     }
 
-    pub fn clean_mat(&self, input_img: &Mat, level: ImgCleanLevel) -> Option<Mat> {
-        let mut exit_img = input_img.clone();
-        let mut processed_for_ai = Mat::default();
-        cvt_color_def(&input_img, &mut processed_for_ai, COLOR_BGRA2BGR).unwrap();
+    pub fn clean_image (&self, input_img: DynamicImage, level: ImgCleanLevel) -> Option<DynamicImage> {
         if level == ImgCleanLevel::Overall {
-            let metric = classify_images(&self.classifier, &Vector::from_elem(processed_for_ai.clone(), 1));
-            if metric[0][4] > self.human_thresholds.sexy || metric[0][1] > self.human_thresholds.hentai || metric[0][3] > self.human_thresholds.porn {
-                return Some(Self::create_overlay(exit_img.cols(), exit_img.rows(), Scalar::new( metric[0][3] as f64 * 200.0, metric[0][1] as f64 * 200.0, metric[0][4] as f64 * 200.0, 0.0), input_img.channels()));
+            let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
+            println!("{:?}", metric);
+            if metric[[0,4]] > self.human_thresholds.sexy || metric[[0,1]] > self.human_thresholds.hentai || metric[[0,3]] > self.human_thresholds.porn {
+                return Some(Self::create_overlay_nd(input_img.width(), input_img.height(), Rgb([(metric[[0,3]] * 200.0) as u8, (metric[[0,1]] * 200.0) as u8, (metric[[0,4]] * 200.0) as u8]), input_img.color()));
             }
         } else if level == ImgCleanLevel::Human {
             let mut changed = false;
-            //Run Human Detector and convert to Vector
-            let mut humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &processed_for_ai);
-            //Load Images into Vector
-            let mut mats: Vector<Mat> = Vector::new();
+            let mut humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &input_img.clone(), &self.resize_options);
+            let mut human_imgs: Vec<DynamicImage> = Vec::new();
+            let mut exit_img = input_img.clone();
             for human in &humans {
-                let mut cropped: Mat = Mat::default();
-                get_rect_sub_pix_def(&processed_for_ai, Size::new(human.2 as i32, human.3 as i32), Point2f::new(human.0 + (human.2/2.0), human.1 + (human.3/2.0)), &mut cropped).unwrap();
-                mats.push(cropped);
+                let out = image::DynamicImage::ImageRgba8(exit_img.sub_image(human.0 as u32, human.1 as u32, human.2 as u32, human.3 as u32).to_image());
+                human_imgs.push(out);
             }
             if !humans.is_empty() {
-                let human_metrics = classify_images(&self.classifier, &mats);
+                let human_metrics = classify_images(&self.classifier, &human_imgs, &self.resize_options);
                 for i in 0..humans.len() {
-                    //rectangle(&mut exit_img, Rect::from_point_size(Point::new(humans[i].0 as i32, humans[i].1 as i32), Size::new(humans[i].2 as i32 - 5, humans[i].3 as i32 - 5)), Scalar::new(human_metrics[i][1] as f64 * 255.0, 0.0, 0.0, 0.0), -1, LINE_8, 0);
-                    if human_metrics[i][4] > self.overall_thresholds.sexy || human_metrics[i][1] > self.overall_thresholds.hentai || human_metrics[i][3] > self.overall_thresholds.porn {
-                        if humans[i].0 + humans[i].2 > exit_img.cols() as f32 {
-                            humans[i].2 += exit_img.cols() as f32 - (humans[i].0 + humans[i].2);
+                    if human_metrics[[i,4]] > self.overall_thresholds.sexy || human_metrics[[i,1]] > self.overall_thresholds.hentai || human_metrics[[i,3]] > self.overall_thresholds.porn {
+                        if humans[i].0 + humans[i].2 > exit_img.width() as f32 {
+                            humans[i].2 += exit_img.width() as f32 - (humans[i].0 + humans[i].2);
                         }
-                        if humans[i].1 + humans[i].3 > exit_img.rows() as f32 {
-                            humans[i].3 += exit_img.rows() as f32 - (humans[i].1 + humans[i].3);
+                        if humans[i].1 + humans[i].3 > exit_img.height() as f32 {
+                            humans[i].3 += exit_img.height() as f32 - (humans[i].1 + humans[i].3);
                         }
-                        let overlay = Self::create_overlay(humans[i].2 as i32, humans[i].3 as i32, Scalar::new( human_metrics[i][3] as f64 * 200.0, human_metrics[i][1] as f64 * 200.0, human_metrics[i][4] as f64 * 200.0, 0.0), input_img.channels());
-                        overlay.copy_to(&mut Mat::roi_mut(&mut exit_img, Rect_ { x: humans[i].0 as i32, y: humans[i].1 as i32, width: humans[i].2 as i32, height: humans[i].3 as i32}).unwrap()).unwrap();
+                        let cover = Self::create_overlay_nd(humans[i].2 as u32, humans[i].3 as u32, Rgb([(human_metrics[[i,3]] * 200.0) as u8, (human_metrics[[i,1]] * 200.0) as u8, (human_metrics[[i,4]] * 200.0) as u8]), input_img.color());
+                        overlay(&mut exit_img, &cover, humans[i].0 as i64, humans[i].1 as i64);
                         changed = true;
                     }
                 }
@@ -146,126 +147,113 @@ impl ImgCleaner {
         return None;
     }
 
-    pub fn classify_mat(&self, input_img: &Mat, level: ImgCleanLevel) -> Vec<(Vec<f32>, Option<(f32, f32, f32, f32, f32)>)> {
-
-        let mut results: Vec<(Vec<f32>, Option<(f32, f32, f32, f32, f32)>)> = Vec::new();
-        let mut processed_for_ai = Mat::default();
-        cvt_color_def(&input_img, &mut processed_for_ai, COLOR_BGRA2BGR).unwrap();
+    pub fn classify_image(&self, input_img: DynamicImage, level: ImgCleanLevel) -> Vec<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 1]>>, Option<(f32, f32, f32, f32, f32)>)> {
+        let mut results: Vec<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 1]>>, Option<(f32, f32, f32, f32, f32)>)> = Vec::new();
         if level == ImgCleanLevel::Overall {
-            results.push((classify_images(&self.classifier, &Vector::from_elem(processed_for_ai.clone(), 1))[0].clone(), None));
+            let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
+            if metric[[0,4]] > self.human_thresholds.sexy || metric[[0,1]] > self.human_thresholds.hentai || metric[[0,3]] > self.human_thresholds.porn {
+                results.push((metric.slice(s![0,..]).to_owned(), None));
+            }
         } else if level == ImgCleanLevel::Human {
-            //Run Human Detector and convert to Vector
-            let humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &processed_for_ai);
-            //Load Images into Vector
-            let mut mats: Vector<Mat> = Vector::new();
+            let humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &input_img.clone(), &self.resize_options);
+            let mut human_imgs: Vec<DynamicImage> = Vec::new();
+            let mut exit_img = input_img.clone();
             for human in &humans {
-                let mut cropped: Mat = Mat::default();
-                get_rect_sub_pix_def(&processed_for_ai, Size::new(human.2 as i32, human.3 as i32), Point2f::new(human.0 + (human.2/2.0), human.1 + (human.3/2.0)), &mut cropped).unwrap();
-                mats.push(cropped);
+                let out = image::DynamicImage::ImageRgba8(exit_img.sub_image(human.0 as u32, human.1 as u32, human.2 as u32, human.3 as u32).to_image());
+                human_imgs.push(out);
             }
             if !humans.is_empty() {
-                let mut human_metrics = classify_images(&self.classifier, &mats);
-                for i in humans {
-                    results.push((human_metrics.remove(0), Some(i)));
+                let human_metrics = classify_images(&self.classifier, &human_imgs, &self.resize_options);
+                for i in 0..humans.len() {
+                    results.push((human_metrics.slice(s![i,..]).to_owned(), Some(humans[i])));
                 }
             }
         }
         results
     }
 
-    #[cfg(feature = "gif")]
-    //Automatic GIF Cleaning Level is Overall, since any other level would probably crash your computer or signifgantly slow it down
-    pub fn clean_gif<R> (&self, input_gif: R) -> Option<Vec<u8>> where R: std::io::Read {
-        use std::ffi::c_void;
-
-        use gif::Frame;
-
-        let mut decoder = gif::DecodeOptions::new();
-        decoder.set_color_output(gif::ColorOutput::RGBA);
-        let decoder = decoder.read_info(input_gif).unwrap();
-        let width = decoder.width() as i32;
-        let height = decoder.height() as i32;
-        let colormap = decoder.global_palette().unwrap_or(&[]).to_owned();
-        let repeat = decoder.repeat();
-        let mut src = Mat::zeros(height, width, CV_8UC4).unwrap().to_mat().unwrap();
-        let mut cleaned_frames: Vec<Frame> = Vec::new();
-        let mut changed = false;
-        let mut decoder_iter = decoder.into_iter();
-        while let Some(Ok(frame)) = decoder_iter.next() {
-            let data = &frame.buffer;
-            let delay = frame.delay;
-            let image_raw = unsafe {
-                Mat::new_rows_cols_with_data_unsafe_def(height, width, CV_8UC4, data.as_ptr() as *mut c_void).unwrap()
-            };
-            let mut image = Mat::default();
-            cvt_color_def(&image_raw, &mut image, COLOR_RGBA2BGRA).unwrap();
-            let mut img_layers: Vector<Mat> = Vector::new();
-            split(&image, &mut img_layers);
-            image.copy_to_masked(&mut src, &img_layers.get(3).unwrap()).unwrap();
-            let cleaned = self.clean_mat(&src, CleanLevel::Human);
-            if cleaned.is_some() {
-                let mut image_raw = Mat::default();
-                cvt_color_def(&cleaned.unwrap(), &mut image_raw, COLOR_BGRA2RGB).unwrap();
-                let mut frame = gif::Frame::from_rgb_speed(width as u16, height as u16, &mut image_raw.data_bytes().unwrap().to_vec(), 15);
-                if delay < 10 {
-                    let skip_frames = (10.0/delay as f32) as usize;
-                    decoder_iter.nth(skip_frames);
-                    frame.delay = delay * (skip_frames +1) as u16;
-                } else {
-                    frame.delay = delay;
-                }
-                cleaned_frames.push(frame);
-                changed = true;
-            } else {
-                let mut image_raw = Mat::default();
-                cvt_color_def(&src, &mut image_raw, COLOR_BGRA2RGB).unwrap();
-                let mut frame2 = gif::Frame::from_rgb_speed(width as u16, height as u16, &mut image_raw.data_bytes().unwrap().to_vec(), 15);
-                frame2.delay = delay;
-                cleaned_frames.push(frame2);
-            }
-        }
-        if changed {
-            let mut out_file: Vec<u8> = Vec::new();
-            {
-                let mut encoder = gif::Encoder::new(&mut out_file, width as u16, height as u16, &colormap).unwrap();
-                encoder.set_repeat(repeat).unwrap();
-                for state in &cleaned_frames {
-                    encoder.write_frame(&state).unwrap();
-                }
-            }
-            return Some(out_file);
+    fn create_overlay_nd (width: u32, height: u32, color: Rgb<u8>, channels: ColorType) -> DynamicImage {
+        let mut husk = ImageBuffer::from_pixel(width, height, color.to_rgba());
+        let icon = ImageReader::new(Cursor::new(include_bytes!("../../icon.png"))).with_guessed_format().unwrap().decode().unwrap();
+        let mut reicon = DynamicImage::new_rgba8(1, 1);
+        let mut resizer = Resizer::new();
+        if height < width {
+            reicon = DynamicImage::new(height, height, ColorType::Rgba8);
         } else {
-            return None;
+            reicon = DynamicImage::new(width, width, ColorType::Rgba8);
         }
+        resizer.resize(&icon, &mut reicon, Some(&ResizeOptions::new().resize_alg(ResizeAlg::Nearest))).unwrap();
+        if height < width {
+            overlay(&mut husk, &reicon, ((width-height)/2) as i64, 0);
+        } else {
+            overlay(&mut husk, &reicon, 0, ((height-width)/2) as i64);
+        }
+        husk.into()
     }
-    //Create Overlay for NSFW Content
-    fn create_overlay (width: i32, height: i32, color: Scalar, channels: i32) -> Mat {
-        let mut husk = Mat::zeros(64, 64, CV_8UC4).unwrap().to_mat().unwrap();
-        husk.set_to_def(&color).unwrap();
-        let icon = imdecode(include_bytes!("../../icon.png"), IMREAD_UNCHANGED).unwrap();
-        let mut icon_layers: Vector<Mat> = Vector::new();
-        split(&icon, &mut icon_layers).unwrap();
-        icon.copy_to_masked(&mut husk.roi_mut(Rect_ { x: 16, y: 16, width: 32, height: 32 }).unwrap(), &icon_layers.get(3).unwrap()).unwrap();
-        let ratio = 64.0 / width.min(height) as f32;
-        let mut extended = Mat::default();
-        let extension = (((width.max(height)) as f32 * ratio)/2.0)as i32 -32;
-        if width > height {
-            copy_make_border(&husk, &mut extended, 0, 0, extension, extension, BORDER_CONSTANT, color).unwrap();
-        } else {
-            copy_make_border(&husk, &mut extended, extension, extension, 0, 0, BORDER_CONSTANT, color).unwrap();
-        }
-        if ratio != 1.0 {
-            let holder = extended.clone();
-            resize(&holder, &mut extended, Size::new(width, height), 0.0, 0.0, INTER_NEAREST).unwrap();
-        }
-        let mut mask = Mat::default();
-        if channels == 1 {
-            cvt_color_def(&extended, &mut mask, COLOR_BGRA2GRAY).unwrap();
-        } else if channels == 3 {
-            cvt_color_def(&extended, &mut mask, COLOR_BGRA2BGR).unwrap();
-        } else {
-            mask = extended.clone();
-        }
-        mask
-    }
+
+    // #[cfg(feature = "gif")]
+    // //Automatic GIF Cleaning Level is Overall, since any other level would probably crash your computer or signifgantly slow it down
+    // pub fn clean_gif<R> (&self, input_gif: R) -> Option<Vec<u8>> where R: std::io::Read {
+    //     use std::ffi::c_void;
+
+    //     use gif::Frame;
+
+    //     let mut decoder = gif::DecodeOptions::new();
+    //     decoder.set_color_output(gif::ColorOutput::RGBA);
+    //     let decoder = decoder.read_info(input_gif).unwrap();
+    //     let width = decoder.width() as i32;
+    //     let height = decoder.height() as i32;
+    //     let colormap = decoder.global_palette().unwrap_or(&[]).to_owned();
+    //     let repeat = decoder.repeat();
+    //     let mut src = Mat::zeros(height, width, CV_8UC4).unwrap().to_mat().unwrap();
+    //     let mut cleaned_frames: Vec<Frame> = Vec::new();
+    //     let mut changed = false;
+    //     let mut decoder_iter = decoder.into_iter();
+    //     while let Some(Ok(frame)) = decoder_iter.next() {
+    //         let data = &frame.buffer;
+    //         let delay = frame.delay;
+    //         let image_raw = unsafe {
+    //             Mat::new_rows_cols_with_data_unsafe_def(height, width, CV_8UC4, data.as_ptr() as *mut c_void).unwrap()
+    //         };
+    //         let mut image = Mat::default();
+    //         cvt_color_def(&image_raw, &mut image, COLOR_RGBA2BGRA).unwrap();
+    //         let mut img_layers: Vector<Mat> = Vector::new();
+    //         split(&image, &mut img_layers);
+    //         image.copy_to_masked(&mut src, &img_layers.get(3).unwrap()).unwrap();
+    //         let cleaned = self.clean_mat(&src, CleanLevel::Human);
+    //         if cleaned.is_some() {
+    //             let mut image_raw = Mat::default();
+    //             cvt_color_def(&cleaned.unwrap(), &mut image_raw, COLOR_BGRA2RGB).unwrap();
+    //             let mut frame = gif::Frame::from_rgb_speed(width as u16, height as u16, &mut image_raw.data_bytes().unwrap().to_vec(), 15);
+    //             if delay < 10 {
+    //                 let skip_frames = (10.0/delay as f32) as usize;
+    //                 decoder_iter.nth(skip_frames);
+    //                 frame.delay = delay * (skip_frames +1) as u16;
+    //             } else {
+    //                 frame.delay = delay;
+    //             }
+    //             cleaned_frames.push(frame);
+    //             changed = true;
+    //         } else {
+    //             let mut image_raw = Mat::default();
+    //             cvt_color_def(&src, &mut image_raw, COLOR_BGRA2RGB).unwrap();
+    //             let mut frame2 = gif::Frame::from_rgb_speed(width as u16, height as u16, &mut image_raw.data_bytes().unwrap().to_vec(), 15);
+    //             frame2.delay = delay;
+    //             cleaned_frames.push(frame2);
+    //         }
+    //     }
+    //     if changed {
+    //         let mut out_file: Vec<u8> = Vec::new();
+    //         {
+    //             let mut encoder = gif::Encoder::new(&mut out_file, width as u16, height as u16, &colormap).unwrap();
+    //             encoder.set_repeat(repeat).unwrap();
+    //             for state in &cleaned_frames {
+    //                 encoder.write_frame(&state).unwrap();
+    //             }
+    //         }
+    //         return Some(out_file);
+    //     } else {
+    //         return None;
+    //     }
+    // }
 }

@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-opencv = {version = "=0.93.4", default-features = false, features = ["imgcodecs", "imgproc", "dnn"], optional = true }
 ort = { version = "=2.0.0-rc.8", features = ["cuda", "load-dynamic", "tensorrt"]}
 ort-sys = "=2.0.0-rc.8"
 geo = { version = "0.29.3", optional = true }
@@ -13,10 +12,16 @@ bincode = { version = "2.0.1", optional = true }
 gif = { version = "0.13.1", optional = true }
 tokenizers = { version = "0.22.0", default-features = false, features = ["fancy-regex"], optional = true }
 fancy-regex = { version = "0.16.2", optional = true }
+image = { version = "0.25.8", optional = true }
+nshare = { version = "0.10.0", optional = true }
+fast_image_resize = { version = "5.3.0", features = ["image"] }
 
 [features]
 default = ["image_scan", "text_scan"]
 bincode=["dep:bincode"]
 gif=["dep:gif"]
-image_scan = ["dep:opencv", "dep:geo"]
+image_scan = ["dep:image", "dep:geo", "dep:nshare"]
 text_scan = ["dep:tokenizers", "dep:fancy-regex"]
+
+[profile.dev]
+opt-level = 1

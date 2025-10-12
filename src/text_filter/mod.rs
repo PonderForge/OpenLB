@@ -29,7 +29,7 @@ impl TxtCleanerBuilder {
         }
 
         //Load Models
-        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/text_classify.onnx")).unwrap();
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/text_classify_quant.onnx")).unwrap();
         let tokenizer: Tokenizer = Tokenizer::from_bytes(include_bytes!("../../models/text_tokenizer.json")).unwrap();
         for _ in 0..20 {
             classify_string_warmup(&classifier);
@@ -38,6 +38,7 @@ impl TxtCleanerBuilder {
         TxtCleaner { classifier: classifier, sentence_threshold: self.sentence_threshold, tokenizer: tokenizer, sentence_seperator: re}
     }
 }
+
 #[derive(Debug)]
 pub struct TxtCleaner {
     classifier: Session,
@@ -59,7 +60,6 @@ impl TxtCleaner {
             let mut removals = 0;
             for i in 0..sentence_group.len() {
                 if ret[i][1] > self.sentence_threshold {
-                    println!("{:?}", sentence_group[i - removals]);
                     sentence_group.remove(i - removals);
                     removals += 1;
                 }

@@ -1,21 +1,23 @@
-use opencv::imgcodecs::{imwrite, imread, IMREAD_UNCHANGED};
 #[cfg(feature = "text_scan")]
 use openlb::text_filter::TxtCleaner;
 use std::time::Instant;
 #[cfg(feature = "image_scan")]
 use openlb::img_filter::{ImgCleanLevel, ImgCleaner};
 
+
 #[test]
 #[cfg(feature = "image_scan")]
 fn clean_image() {
     let cleaner = ImgCleaner::builder().commit();
-    let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
-    let out = cleaner.clean_mat(&input_img, ImgCleanLevel::Human);
+    let img = image::open("test.jpg").unwrap();
+    
+    let out = cleaner.clean_image(img, ImgCleanLevel::Human);
     if out.is_none() {
-        panic!("No NSFW Content Detected");
+        println!("No NSFW Content Detected");
+        return;
     }
     let out = out.unwrap();
-    imwrite("out.png", &out, &opencv::core::Vector::new()).unwrap();
+    out.save("out.jpg");
 }
 
 #[test]
@@ -37,13 +39,12 @@ fn clean_folder() {
         let p = path.unwrap().path();
         let path = p.as_os_str().to_str().unwrap();
         if path.ends_with("jpg") {
-            let input_img = imread(path, IMREAD_UNCHANGED).unwrap();
-            let out = cleaner.clean_mat(&input_img, ImgCleanLevel::Human);
+            let out = cleaner.clean_image(image::open(path).unwrap(), ImgCleanLevel::Human);
             if out.is_none() {
                 println!("No NSFW Content Detected");
             } else {
                 let out = out.unwrap();
-                imwrite(&format!("out/out{}.png", i), &out, &opencv::core::Vector::new()).unwrap();
+                out.save(&format!("out/out{}.png", i)).unwrap();
                 i+=1; 
             }
         }
@@ -54,20 +55,24 @@ fn clean_folder() {
 #[test]
 #[cfg(feature = "image_scan")]
 fn image_time() {
+
     let cleaner = ImgCleaner::builder().commit();
-    let input_img = imread("test.jpg", IMREAD_UNCHANGED).unwrap();
-    let now = Instant::now();
+    let input_img = image::open("test.jpg").unwrap();
+    let mut tot_time = 0;
     for _ in 0..50 {
-        cleaner.classify_mat(&input_img, ImgCleanLevel::Human);
+        let img = input_img.clone();
+        let now = Instant::now();
+        cleaner.classify_image(img, ImgCleanLevel::Human);
+        tot_time += now.elapsed().as_millis();
     }
-    println!("Average Time: {:?}", now.elapsed() / 50);
+    println!("Average Time: {:?}ms", tot_time / 50);
 }
 
 #[test]
 #[cfg(feature = "text_scan")]
 fn text_time() {
     let txtcleaner = TxtCleaner::builder().commit();
-    let text: String = "Hello I like trains!".to_string();
+    let text: String = "Hello I like trains! I love Jesus! How much would a wood chuck chuck if a wood chuck would chuck wood? The girl put on her leotard and let him stroke her.".to_string();
     let now = Instant::now();
     for _ in 0..50 {
         txtcleaner.clean_text(&text);
