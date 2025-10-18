@@ -1,16 +1,9 @@
-use fast_image_resize::Resizer;
-use image::imageops::overlay;
-use image::ImageBuffer;
-use image::Rgb;
-use ndarray::ArrayBase;
-use ndarray::Dim;
-use ndarray::OwnedRepr;
-use ndarray::{s, Array, Axis, IxDyn};
+use ndarray::{s, Array, Axis, IxDyn, OwnedRepr, Dim, ArrayBase};
 use crate::img_filter::box_mbr::Mbr;
 use ort::{Session, inputs};
-use image::DynamicImage;
+use image::{DynamicImage, ImageBuffer, Rgb, imageops::overlay};
 use nshare::AsNdarray3;
-use fast_image_resize::ResizeOptions;
+use fast_image_resize::{ResizeOptions, Resizer};
 
 pub fn detect_humans(detector: &Session, input_img: &DynamicImage, resize_options: &ResizeOptions) -> Vec<(f32, f32, f32, f32, f32)> {
     //Convert Image to a Tensor
@@ -30,18 +23,17 @@ pub fn detect_humans_warmup (detector: &Session) {
 fn obj_preprocess(input: &DynamicImage, resize_options: &ResizeOptions) -> ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>> {
     let h1 = 640f32 * (input.height() as f32/input.width() as f32);
     let w1 = 640f32 * (input.width() as f32/input.height() as f32);
-    let mut dst_image = DynamicImage::new_rgb8(1, 1);
     let mut husk = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(640, 640, Rgb([143u8, 143u8, 143u8])));
     let mut resizer = Resizer::new();
     let mut x1 = 0f32;
     let mut y1 = 0f32;
-    if h1 <= 640f32 {
-        dst_image = DynamicImage::new(640, h1 as u32, input.color());
+    let mut dst_image = if h1 <= 640f32 {
         y1 = (640f32 - h1) / 2f32;
+        DynamicImage::new(640, h1 as u32, input.color())
     } else {
-        dst_image = DynamicImage::new(w1 as u32, 640, input.color());
         x1 = (640f32 - w1) / 2f32;
-    }
+        DynamicImage::new(w1 as u32, 640, input.color())
+    };
     resizer.resize(input, &mut dst_image, Some(resize_options)).unwrap();
     overlay(&mut husk, &dst_image, x1 as i64, y1 as i64);
     let array = husk.to_rgb32f().as_ndarray3().to_owned();

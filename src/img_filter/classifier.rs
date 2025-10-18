@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use fast_image_resize::ResizeOptions;
 use image::DynamicImage;
 use ndarray::{concatenate, s, ArrayBase, ArrayD, Axis, Dim, OwnedRepr};
@@ -27,15 +29,5 @@ fn image_process (input: &DynamicImage, resize_options: &ResizeOptions) -> Array
     let mut resizer = Resizer::new();
     resizer.resize(input, &mut dst_image, Some(resize_options)).unwrap();
     let image = dst_image.into_rgb32f();
-    let mut array = image.as_ndarray3().to_owned();
-    let mut r = array.slice_mut(s![0,..,..]);
-    r -= 0.485;
-    r /= 0.229;
-    let mut b = array.slice_mut(s![1,..,..]);
-    b -= 0.456;
-    b /= 0.224;
-    let mut g = array.slice_mut(s![2,..,..]);
-    g -= 0.406;
-    g /= 0.225;
-    array.insert_axis(Axis(0))
+    image.as_ndarray3().to_owned().insert_axis(Axis(0))
 }

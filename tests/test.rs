@@ -11,8 +11,10 @@ fn clean_image() {
     let cleaner = ImgCleaner::builder().commit();
     let img = image::open("test.jpg").unwrap();
     
-    let out = cleaner.clean_image(img, ImgCleanLevel::Human);
-    if out.is_none() {
+    let now = Instant::now();
+    let out = cleaner.clean_image(img, ImgCleanLevel::Overall);
+    println!("{:?}", now.elapsed());
+    if out.is_none() { 
         println!("No NSFW Content Detected");
         return;
     }
@@ -33,15 +35,17 @@ fn clean_text() {
 #[cfg(feature = "image_scan")]
 fn clean_folder() {
     let cleaner = ImgCleaner::builder().commit();
-    let paths = std::fs::read_dir("./ai_nsfw_test").unwrap();
+    let paths = std::fs::read_dir("../gym_collection/0_out").unwrap();
     let mut i = 0;
     for path in paths {
         let p = path.unwrap().path();
         let path = p.as_os_str().to_str().unwrap();
         if path.ends_with("jpg") {
-            let out = cleaner.clean_image(image::open(path).unwrap(), ImgCleanLevel::Human);
+            let img = image::open(path).unwrap();
+            let out = cleaner.clean_image(img.clone(), ImgCleanLevel::Overall);
             if out.is_none() {
-                println!("No NSFW Content Detected");
+                img.save(&format!("out/out{}.png", i)).unwrap();
+                i+=1; 
             } else {
                 let out = out.unwrap();
                 out.save(&format!("out/out{}.png", i)).unwrap();
@@ -72,12 +76,13 @@ fn image_time() {
 #[cfg(feature = "text_scan")]
 fn text_time() {
     let txtcleaner = TxtCleaner::builder().commit();
-    let text: String = "Hello I like trains! I love Jesus! How much would a wood chuck chuck if a wood chuck would chuck wood? The girl put on her leotard and let him stroke her.".to_string();
+    let text = "";
     let now = Instant::now();
     for _ in 0..50 {
         txtcleaner.clean_text(&text);
     }
     println!("Average Time: {:?}", now.elapsed() / 50);
+    println!("{}", txtcleaner.clean_text(&text));
 }
 
 #[test]
@@ -85,11 +90,9 @@ fn text_time() {
 fn clean_gif() {
     use std::io::Write;
 
-    let thresholds = LBThresholds { sexy: 0.1, porn: 0.74, hentai: 0.5 };
-    let cleaner = ImgCleaner::init(Some(thresholds), Some(thresholds), Some(CPUExecutionProvider::default().into()));
-    cleaner.warmup(20);
-    let input = std::fs::File::open("unnamed.gif").unwrap();
-    let out = cleaner.clean_gif(input);
+    let cleaner = ImgCleaner::builder().commit();
+    let input = std::fs::File::open("gif_test/test.gif").unwrap();
+    let out = cleaner.clean_gif_nd(input);
     let mut file = std::fs::File::create("out.gif").unwrap();
     if out.is_none() {
         println!("No NSFW Content Detected");
