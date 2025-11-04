@@ -1,6 +1,6 @@
 [package]
 name = "openlb"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license-file = "LICENSE"
 description = "A high-speed Sexual Image classifier and filtering library"
@@ -10,7 +10,7 @@ keywords = ["nsfw", "onnx", "transformers", "ai", "image"]
 categories = ["text-processing", "multimedia::images", "computer-vision"]
 
 [dependencies]
-ort = { version = "=2.0.0-rc.8", default-features = false, features = ["load-dynamic", "half", "ndarray"]}
+ort = { version = "=2.0.0-rc.8", features = ["load-dynamic", "download-binaries"]}
 ort-sys = { version = "=2.0.0-rc.8"}
 geo = { version = "0.29.3", optional = true }
 ndarray = "0.16.1"

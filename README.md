@@ -13,7 +13,7 @@ Getting started
 
 1. Requirements
 - Rust (stable) toolchain.
-- Place the ONNX models and tokenizer found in the latest github release into a `/model` directory next to the compiled binary.
+- Place the ONNX models and tokenizer found in the latest [github release](https://github.com/PonderForge/OpenLB/releases/) into a `/model` directory next to the compiled binary.
 
 2. Check out our examples as reference
 
