@@ -3,7 +3,6 @@ pub mod classifier;
 mod box_mbr;
 
 use std::io::Cursor;
-use std::time::Instant;
 
 use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 use image::imageops::overlay;
@@ -110,7 +109,6 @@ impl ImgCleaner {
     pub fn clean_image (&self, input_img: DynamicImage, level: ImgCleanLevel) -> Option<DynamicImage> {
         if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
-            println!("{:?}", metric);
             if metric[[0,4]] > self.human_thresholds.sexy || metric[[0,1]] > self.human_thresholds.hentai || metric[[0,3]] > self.human_thresholds.porn {
                 return Some(Self::create_overlay(input_img.width(), input_img.height(), Rgb([(metric[[0,3]] * 200.0) as u8, (metric[[0,1]] * 200.0) as u8, (metric[[0,4]] * 200.0) as u8])));
             }
@@ -131,7 +129,6 @@ impl ImgCleaner {
             }
             if !humans.is_empty() {
                 let human_metrics = classify_images(&self.classifier, &human_imgs, &self.resize_options);
-                println!("{:?}", human_metrics);
                 for i in 0..humans.len() {
                     if human_metrics[[i,4]] > self.overall_thresholds.sexy || human_metrics[[i,1]] > self.overall_thresholds.hentai || human_metrics[[i,3]] > self.overall_thresholds.porn {
                         let cover = Self::create_overlay(humans[i].2 as u32, humans[i].3 as u32, Rgb([(human_metrics[[i,3]] * 200.0) as u8, (human_metrics[[i,1]] * 200.0) as u8, (human_metrics[[i,4]] * 200.0) as u8]));

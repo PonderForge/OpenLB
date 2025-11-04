@@ -19,7 +19,7 @@ fn clean_image() {
         return;
     }
     let out = out.unwrap();
-    out.save("out.jpg");
+    out.save("out.jpg").unwrap();
 }
 
 #[test]
@@ -27,7 +27,7 @@ fn clean_image() {
 fn clean_text() {
     let txtcleaner = TxtCleaner::builder().commit();
     let now = Instant::now();
-    std::fs::write("out.txt", txtcleaner.clean_text(std::fs::read_to_string("test.txt").unwrap()));
+    std::fs::write("out.txt", txtcleaner.clean_text(std::fs::read_to_string("test.txt").unwrap())).unwrap();
     println!("Text Detect Time: {:?}", now.elapsed());
 }
 
@@ -35,7 +35,7 @@ fn clean_text() {
 #[cfg(feature = "image_scan")]
 fn clean_folder() {
     let cleaner = ImgCleaner::builder().commit();
-    let paths = std::fs::read_dir("../gym_collection/0_out").unwrap();
+    let paths = std::fs::read_dir("../../Downloads/eval/val/neutral").unwrap();
     let mut i = 0;
     for path in paths {
         let p = path.unwrap().path();
