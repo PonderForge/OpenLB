@@ -13,7 +13,7 @@ Getting started
 
 1. Requirements
 - Rust (stable) toolchain.
-- Place the ONNX models and tokenizer found in the `models/` directory next to the compiled binary or adjust paths as needed.
+- Place the ONNX models and tokenizer found in the latest github release into a `/model` directory next to the compiled binary.
 
 2. Check out our examples as reference
 

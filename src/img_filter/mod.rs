@@ -70,8 +70,8 @@ impl ImgCleanerBuilder {
             panic!("ONNX was not correctly initalized!");
         }
         //Load Models
-        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/human_detector.onnx")).unwrap();
-        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(include_bytes!("../../models/img_classifier.onnx")).unwrap();
+        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_file("./models/human_detector.onnx").unwrap();
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_file("./models/img_classifier.onnx").unwrap();
         for _ in 0..10 {
             detect_humans_warmup(&detector);
             classify_img_warmup(&classifier);
