@@ -10,7 +10,7 @@ keywords = ["nsfw", "onnx", "transformers", "ai", "image"]
 categories = ["text-processing", "multimedia::images", "computer-vision"]
 
 [dependencies]
-ort = { version = "=2.0.0-rc.8", features = ["load-dynamic", "download-binaries"]}
+ort = { version = "=2.0.0-rc.8", features = ["load-dynamic"]}
 ort-sys = { version = "=2.0.0-rc.8"}
 geo = { version = "0.29.3", optional = true }
 ndarray = "0.16.1"
@@ -23,11 +23,12 @@ nshare = { version = "0.10.0", optional = true }
 fast_image_resize = { version = "5.3.0", features = ["image"] }
 
 [features]
-default = ["image_scan", "text_scan"]
+default = ["image_scan", "text_scan", "human_scan"]
 bincode=["dep:bincode"]
 gif=["dep:gif"]
 image_scan = ["dep:image", "dep:geo", "dep:nshare"]
 text_scan = ["dep:tokenizers", "dep:fancy-regex"]
+human_scan = ["image_scan"]
 
 [profile.dev]
 opt-level = 1

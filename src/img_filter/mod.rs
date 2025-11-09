@@ -1,5 +1,7 @@
+#[cfg(feature = "human_scan")]
 mod human_det;
 pub mod classifier;
+#[cfg(feature = "human_scan")]
 mod box_mbr;
 
 use std::io::Cursor;
@@ -10,6 +12,7 @@ use image::{ColorType, DynamicImage, GenericImage, ImageBuffer, ImageReader, Pix
 use ndarray::{s, ArrayBase, Dim, OwnedRepr};
 
 use classifier::{classify_img_warmup, classify_images};
+#[cfg(feature = "human_scan")]
 use human_det::{detect_humans_warmup, detect_humans};
 
 #[cfg(feature = "bincode")]
@@ -36,17 +39,20 @@ impl ImgThresholds {
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
 pub enum ImgCleanLevel {
     Overall,
+    #[cfg(feature = "human_scan")]
     Human
 }
 
-// Image Cleaner Builder for All the Options
+/// Image Cleaner Builder for All the Options
 pub struct ImgCleanerBuilder {
+    #[cfg(feature = "human_scan")]
     human_thresholds: ImgThresholds,
     overall_thresholds: ImgThresholds,
     exec_provider: ExecutionProviderDispatch
 }
 
 impl ImgCleanerBuilder {
+    #[cfg(feature = "human_scan")]
     pub fn with_human_thres (mut self, human_thres: ImgThresholds) -> ImgCleanerBuilder {
         self.human_thresholds = human_thres;
         self
@@ -70,24 +76,35 @@ impl ImgCleanerBuilder {
             panic!("ONNX was not correctly initalized!");
         }
         //Load Models
+        #[cfg(feature = "human_scan")]
         let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_file("./models/human_detector.onnx").unwrap();
         let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_file("./models/img_classifier.onnx").unwrap();
         for _ in 0..10 {
+            #[cfg(feature = "human_scan")]
             detect_humans_warmup(&detector);
             classify_img_warmup(&classifier);
         }
         let resize_options = ResizeOptions::new()
             .resize_alg(ResizeAlg::Convolution(FilterType::CatmullRom))
             .use_alpha(false);
-        ImgCleaner { detector: detector, classifier: classifier, human_thresholds: self.human_thresholds, overall_thresholds: self.overall_thresholds, resize_options: resize_options}
+        ImgCleaner { 
+            #[cfg(feature = "human_scan")]
+            detector: detector, 
+            classifier: classifier, 
+            #[cfg(feature = "human_scan")]
+            human_thresholds: self.human_thresholds, 
+            overall_thresholds: self.overall_thresholds, 
+            resize_options: resize_options}
     }
 }
 
 // Main Image Cleaner Struct
 #[derive(Debug)]
 pub struct ImgCleaner {
+    #[cfg(feature = "human_scan")]
     detector: Session,
     classifier: Session,
+    #[cfg(feature = "human_scan")]
     human_thresholds: ImgThresholds,
     overall_thresholds: ImgThresholds,
     resize_options: ResizeOptions
@@ -96,7 +113,11 @@ pub struct ImgCleaner {
 impl ImgCleaner {
     pub fn builder() -> ImgCleanerBuilder {
         let thresholds = ImgThresholds { sexy: 0.80, porn: 0.84, hentai: 0.80 };
-        ImgCleanerBuilder {human_thresholds: thresholds, overall_thresholds: thresholds, exec_provider: ort::CPUExecutionProvider::default().into()}
+        ImgCleanerBuilder {
+            #[cfg(feature = "human_scan")]
+            human_thresholds: thresholds, 
+            overall_thresholds: thresholds, 
+            exec_provider: ort::CPUExecutionProvider::default().into()}
     }
 
     pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: ImgCleanLevel) {
@@ -109,10 +130,12 @@ impl ImgCleaner {
     pub fn clean_image (&self, input_img: DynamicImage, level: ImgCleanLevel) -> Option<DynamicImage> {
         if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
-            if metric[[0,4]] > self.human_thresholds.sexy || metric[[0,1]] > self.human_thresholds.hentai || metric[[0,3]] > self.human_thresholds.porn {
+            if metric[[0,4]] > self.overall_thresholds.sexy || metric[[0,1]] > self.overall_thresholds.hentai || metric[[0,3]] > self.overall_thresholds.porn {
                 return Some(Self::create_overlay(input_img.width(), input_img.height(), Rgb([(metric[[0,3]] * 200.0) as u8, (metric[[0,1]] * 200.0) as u8, (metric[[0,4]] * 200.0) as u8])));
             }
-        } else if level == ImgCleanLevel::Human {
+        }
+        #[cfg(feature = "human_scan")] 
+        if level == ImgCleanLevel::Human {
             let mut changed = false;
             let mut humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &input_img.clone(), &self.resize_options);
             let mut human_imgs: Vec<DynamicImage> = Vec::new();
@@ -130,7 +153,7 @@ impl ImgCleaner {
             if !humans.is_empty() {
                 let human_metrics = classify_images(&self.classifier, &human_imgs, &self.resize_options);
                 for i in 0..humans.len() {
-                    if human_metrics[[i,4]] > self.overall_thresholds.sexy || human_metrics[[i,1]] > self.overall_thresholds.hentai || human_metrics[[i,3]] > self.overall_thresholds.porn {
+                    if human_metrics[[i,4]] > self.human_thresholds.sexy || human_metrics[[i,1]] > self.human_thresholds.hentai || human_metrics[[i,3]] > self.human_thresholds.porn {
                         let cover = Self::create_overlay(humans[i].2 as u32, humans[i].3 as u32, Rgb([(human_metrics[[i,3]] * 200.0) as u8, (human_metrics[[i,1]] * 200.0) as u8, (human_metrics[[i,4]] * 200.0) as u8]));
                         overlay(&mut exit_img, &cover, humans[i].0 as i64, humans[i].1 as i64);
                         changed = true;
@@ -150,10 +173,10 @@ impl ImgCleaner {
         let mut results: Vec<(ArrayBase<OwnedRepr<f32>, Dim<[usize; 1]>>, Option<(f32, f32, f32, f32, f32)>)> = Vec::new();
         if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
-            if metric[[0,4]] > self.human_thresholds.sexy || metric[[0,1]] > self.human_thresholds.hentai || metric[[0,3]] > self.human_thresholds.porn {
-                results.push((metric.slice(s![0,..]).to_owned(), None));
-            }
-        } else if level == ImgCleanLevel::Human {
+            results.push((metric.slice(s![0,..]).to_owned(), None));
+        } 
+        #[cfg(feature = "human_scan")]
+        if level == ImgCleanLevel::Human {
             let humans: Vec<(f32, f32, f32, f32, f32)> = detect_humans(&self.detector, &input_img.clone(), &self.resize_options);
             let mut human_imgs: Vec<DynamicImage> = Vec::new();
             let mut exit_img = input_img.clone();

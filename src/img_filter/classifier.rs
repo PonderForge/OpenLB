@@ -1,8 +1,6 @@
-use std::time::Instant;
-
 use fast_image_resize::ResizeOptions;
 use image::DynamicImage;
-use ndarray::{concatenate, s, ArrayBase, ArrayD, Axis, Dim, OwnedRepr};
+use ndarray::{concatenate, ArrayBase, ArrayD, Axis, Dim, OwnedRepr};
 use nshare::AsNdarray3;
 use ort::{inputs, Session, SessionOutputs};
 use fast_image_resize::Resizer;
