@@ -26,7 +26,7 @@ fn clean_image() {
 #[cfg(feature = "human_scan")]
 fn clean_humans() {
     let cleaner = ImgCleaner::builder().commit();
-    let img = image::open("test.jpg").unwrap();
+    let img = image::open("test.webp").unwrap();
     
     let now = Instant::now();
     let out = cleaner.clean_image(img, ImgCleanLevel::Human);
@@ -52,14 +52,14 @@ fn clean_text() {
 #[cfg(feature = "image_scan")]
 fn clean_folder() {
     let cleaner = ImgCleaner::builder().commit();
-    let paths = std::fs::read_dir("../../Downloads/eval/val/neutral").unwrap();
+    let paths = std::fs::read_dir("./test").unwrap();
     let mut i = 0;
     for path in paths {
         let p = path.unwrap().path();
         let path = p.as_os_str().to_str().unwrap();
         if path.ends_with("jpg") {
             let img = image::open(path).unwrap();
-            let out = cleaner.clean_image(img.clone(), ImgCleanLevel::Overall);
+            let out = cleaner.clean_image(img.clone(), ImgCleanLevel::Human);
             if out.is_none() {
                 img.save(&format!("out/out{}.png", i)).unwrap();
                 i+=1; 
@@ -123,7 +123,7 @@ fn text_time() {
 fn clean_gif() {
     use std::io::Write;
 
-    let cleaner = ImgCleaner::builder().commit();
+    let cleaner = ImgCleaner::builder().with_min_human_size(100).commit();
     let input = std::fs::File::open("gif_test/test.gif").unwrap();
     let out = cleaner.clean_gif_nd(input);
     let mut file = std::fs::File::create("out.gif").unwrap();
