@@ -21,7 +21,7 @@ use human_det::{detect_humans_warmup, detect_humans};
 use bincode::{Encode, Decode};
 use ort::{ExecutionProviderDispatch, GraphOptimizationLevel, Session};
 
-// Cut off point for NSFW images in one place
+/// Cut off point for NSFW images in different aspects
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
 pub struct ImgThresholds {
@@ -36,7 +36,7 @@ impl ImgThresholds {
     }
 }
 
-// Image Cleaner Level
+/// Image Cleaner Level by Granularity
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
 pub enum ImgCleanLevel {
@@ -45,6 +45,7 @@ pub enum ImgCleanLevel {
     Human
 }
 
+/// Filter Type for Images
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 #[cfg_attr(feature = "bincode", derive(Encode, Decode))]
 pub enum ImgCleanOverlay {
@@ -52,7 +53,7 @@ pub enum ImgCleanOverlay {
     Blur
 }
 
-/// Image Cleaner Builder for All the Options
+/// Image Cleaner Builder to change settings dynamically and return ImgCleaner
 pub struct ImgCleanerBuilder {
     #[cfg(feature = "human_scan")]
     human_thresholds: ImgThresholds,
@@ -68,45 +69,52 @@ pub struct ImgCleanerBuilder {
 
 impl ImgCleanerBuilder {
 
+    /// Set Human ImgThresholds
     #[cfg(feature = "human_scan")]
     pub fn with_human_thres (mut self, human_thres: ImgThresholds) -> ImgCleanerBuilder {
         self.human_thresholds = human_thres;
         self
     }
 
+    /// Set Overall ImgThresholds
     pub fn with_overall_thres (mut self, overall_thres: ImgThresholds) -> ImgCleanerBuilder {
         self.overall_thresholds = overall_thres;
         self
     }
 
+    /// Set Execution Provider for ORT
     pub fn with_exec_provider (mut self, provider: ExecutionProviderDispatch) -> ImgCleanerBuilder {
         self.exec_provider = provider;
         self
     }
 
+    /// Set Overlay Type: ImgCleanOverlay
     pub fn with_overlay_type (mut self, overlay: ImgCleanOverlay) -> ImgCleanerBuilder {
         self.overlay_type = overlay;
         self
     }
 
+    /// Set Minimum Human size to ignore smaller indistinguishable boxes
     #[cfg(feature = "human_scan")]
     pub fn with_min_human_size (mut self, size: u32) -> ImgCleanerBuilder {
         self.min_human_size = size;
         self
     }
 
+    /// Set Human Detector AI file: Get from OpenLB releases at https://github.com/PonderForge/Openlb
     #[cfg(feature = "human_scan")]
     pub fn with_human_detector(mut self, binary: Vec<u8>) -> ImgCleanerBuilder {
         self.human_det = binary;
         self
     }
 
+    /// Set Image Classifier AI file: Get from OpenLB releases at https://github.com/PonderForge/Openlb
     pub fn with_image_classifier(mut self, binary: Vec<u8>) -> ImgCleanerBuilder {
         self.image_class = binary;
         self
     }
     
-
+    /// Commit settings to create new ImgCleaner object
     pub fn commit (mut self) -> ImgCleaner {
         ort::init().with_execution_providers([self.exec_provider]).commit().expect("ORT failed to execute");
         #[cfg(feature = "human_scan")]
@@ -143,7 +151,7 @@ impl ImgCleanerBuilder {
     }
 }
 
-// Main Image Cleaner Struct
+/// The Main Img Cleaner and classifier that processes images and helps to detect and filter NSFW images
 #[derive(Debug)]
 pub struct ImgCleaner {
     #[cfg(feature = "human_scan")]
@@ -159,6 +167,7 @@ pub struct ImgCleaner {
 }
 
 impl ImgCleaner {
+    /// Create builder to create new ImgCleaner Instance
     pub fn builder() -> ImgCleanerBuilder {
         let thresholds = ImgThresholds { sexy: 0.80, porn: 0.84, hentai: 0.80 };
         
@@ -176,6 +185,7 @@ impl ImgCleaner {
         }
     }
 
+    /// Clean Image from File Path from input_path and output to output_path
     pub fn clean_file_path(&self, input_path: &str, output_path: &str, level: ImgCleanLevel) {
         let out = self.clean_image(image::open(input_path).unwrap(), level);
         if out.is_some() {
@@ -183,6 +193,7 @@ impl ImgCleaner {
         }
     }
 
+    /// Clean DynamicImage from Cargo's image crate, will return DynamicImage if the image had been modified to be SFW
     pub fn clean_image (&self, input_img: DynamicImage, level: ImgCleanLevel) -> Option<DynamicImage> {
         if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
@@ -226,6 +237,9 @@ impl ImgCleaner {
         return None;
     }
 
+    /// Classify image from Cargo's image crate, outputting a vector of detections
+    /// If using the human granuality, will return all found humans and their Detection levels
+    /// If using the overall granuality, will return a single tuple with the whole image's detection levels
     pub fn classify_image(&self, input_img: DynamicImage, level: ImgCleanLevel) -> Vec<(f32, f32, f32, f32, f32, f32, f32, f32, f32)> {
         let mut results: Vec<(f32, f32, f32, f32, f32, f32, f32, f32, f32)> = Vec::new();
         if level == ImgCleanLevel::Overall {
@@ -282,6 +296,7 @@ impl ImgCleaner {
     }
 
     #[cfg(feature = "gif")]
+    /// Cleans a gif from bytes and then outputs to bytes if the image was modified 
     pub fn clean_gif_nd<R> (&self, input_gif: R) -> Option<Vec<u8>> where R: std::io::Read {
 
         use image::Rgba;
