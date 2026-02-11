@@ -5,6 +5,8 @@ pub mod classifier;
 mod box_mbr;
 
 use std::io::Cursor;
+#[cfg(feature = "human_scan")]
+use std::io::Read;
 
 use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 use image::imageops::overlay;
@@ -43,6 +45,13 @@ pub enum ImgCleanLevel {
     Human
 }
 
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[cfg_attr(feature = "bincode", derive(Encode, Decode))]
+pub enum ImgCleanOverlay {
+    Icon, 
+    Blur
+}
+
 /// Image Cleaner Builder for All the Options
 pub struct ImgCleanerBuilder {
     #[cfg(feature = "human_scan")]
@@ -50,13 +59,15 @@ pub struct ImgCleanerBuilder {
     overall_thresholds: ImgThresholds,
     exec_provider: ExecutionProviderDispatch,
     #[cfg(feature = "human_scan")]
-    human_det: String,
-    image_class: String,
+    human_det: Vec<u8>,
+    image_class: Vec<u8>,
     #[cfg(feature = "human_scan")]
-    min_human_size: u32
+    min_human_size: u32,
+    overlay_type: ImgCleanOverlay
 }
 
 impl ImgCleanerBuilder {
+
     #[cfg(feature = "human_scan")]
     pub fn with_human_thres (mut self, human_thres: ImgThresholds) -> ImgCleanerBuilder {
         self.human_thresholds = human_thres;
@@ -72,32 +83,43 @@ impl ImgCleanerBuilder {
         self.exec_provider = provider;
         self
     }
+
+    pub fn with_overlay_type (mut self, overlay: ImgCleanOverlay) -> ImgCleanerBuilder {
+        self.overlay_type = overlay;
+        self
+    }
+
     #[cfg(feature = "human_scan")]
     pub fn with_min_human_size (mut self, size: u32) -> ImgCleanerBuilder {
         self.min_human_size = size;
         self
     }
+
     #[cfg(feature = "human_scan")]
-    pub fn with_custom_human_detector (mut self, path: String) -> ImgCleanerBuilder {
-        self.human_det = path;
-        self
-    }
-    pub fn with_custom_image_classifier (mut self, path: String) -> ImgCleanerBuilder {
-        self.image_class = path;
+    pub fn with_human_detector(mut self, binary: Vec<u8>) -> ImgCleanerBuilder {
+        self.human_det = binary;
         self
     }
 
-    pub fn commit (self) -> ImgCleaner {
-        let ort_init = ort::init()
-        .with_execution_providers([self.exec_provider])
-        .commit();
-        if ort_init.is_err() {
-            panic!("ONNX was not correctly initalized!");
+    pub fn with_image_classifier(mut self, binary: Vec<u8>) -> ImgCleanerBuilder {
+        self.image_class = binary;
+        self
+    }
+    
+
+    pub fn commit (mut self) -> ImgCleaner {
+        ort::init().with_execution_providers([self.exec_provider]).commit().expect("ORT failed to execute");
+        #[cfg(feature = "human_scan")]
+        if self.human_det.is_empty() {
+            std::fs::File::open("./models/human_detector.onnx").unwrap().read_to_end(&mut self.human_det).unwrap();
+        }
+        if self.image_class.is_empty() {
+            std::fs::File::open("./models/img_classifier.onnx").unwrap().read_to_end(&mut self.image_class).unwrap();
         }
         //Load Models
         #[cfg(feature = "human_scan")]
-        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_file(self.human_det).unwrap();
-        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_file(self.image_class).unwrap();
+        let detector = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(&self.human_det).unwrap();
+        let classifier = Session::builder().unwrap().with_optimization_level(GraphOptimizationLevel::Level3).unwrap().commit_from_memory(&self.image_class).unwrap();
         for _ in 0..10 {
             #[cfg(feature = "human_scan")]
             detect_humans_warmup(&detector);
@@ -115,7 +137,8 @@ impl ImgCleanerBuilder {
             overall_thresholds: self.overall_thresholds, 
             resize_options: resize_options,
             #[cfg(feature = "human_scan")]
-            min_human_size: self.min_human_size
+            min_human_size: self.min_human_size,
+            overlay_type: self.overlay_type
         }
     }
 }
@@ -131,12 +154,14 @@ pub struct ImgCleaner {
     overall_thresholds: ImgThresholds,
     resize_options: ResizeOptions,
     #[cfg(feature = "human_scan")]
-    min_human_size: u32
+    min_human_size: u32,
+    overlay_type: ImgCleanOverlay
 }
 
 impl ImgCleaner {
     pub fn builder() -> ImgCleanerBuilder {
         let thresholds = ImgThresholds { sexy: 0.80, porn: 0.84, hentai: 0.80 };
+        
         ImgCleanerBuilder {
             #[cfg(feature = "human_scan")]
             human_thresholds: thresholds, 
@@ -145,8 +170,9 @@ impl ImgCleaner {
             #[cfg(feature = "human_scan")]
             min_human_size: 0,
             #[cfg(feature = "human_scan")]
-            human_det: "./models/human_detector.onnx".to_string(),
-            image_class: "./models/img_classifier.onnx".to_string()
+            human_det: Vec::new(),
+            image_class: Vec::new(),
+            overlay_type: ImgCleanOverlay::Icon
         }
     }
 
@@ -161,7 +187,7 @@ impl ImgCleaner {
         if level == ImgCleanLevel::Overall {
             let metric = classify_images(&self.classifier, &vec![input_img.clone()], &self.resize_options);
             if metric[[0,4]] > self.overall_thresholds.sexy || metric[[0,1]] > self.overall_thresholds.hentai || metric[[0,3]] > self.overall_thresholds.porn {
-                return Some(Self::create_overlay(input_img.width(), input_img.height(), Rgb([(metric[[0,3]] * 200.0) as u8, (metric[[0,1]] * 200.0) as u8, (metric[[0,4]] * 200.0) as u8])));
+                return Some(Self::create_overlay(input_img.clone(), input_img.width(), input_img.height(), Rgb([(metric[[0,3]] * 200.0) as u8, (metric[[0,1]] * 200.0) as u8, (metric[[0,4]] * 200.0) as u8]), self.overlay_type));
             }
         }
         #[cfg(feature = "human_scan")] 
@@ -185,7 +211,7 @@ impl ImgCleaner {
                 let human_metrics = classify_images(&self.classifier, &human_imgs, &self.resize_options);
                 for i in 0..filteredhumans.len() {
                     if human_metrics[[i,4]] > self.human_thresholds.sexy || human_metrics[[i,1]] > self.human_thresholds.hentai || human_metrics[[i,3]] > self.human_thresholds.porn {
-                        let cover = Self::create_overlay(filteredhumans[i].2 as u32, filteredhumans[i].3 as u32, Rgb([(human_metrics[[i,3]] * 200.0) as u8, (human_metrics[[i,1]] * 200.0) as u8, (human_metrics[[i,4]] * 200.0) as u8]));
+                        let cover = Self::create_overlay(human_imgs[i].clone(), filteredhumans[i].2 as u32, filteredhumans[i].3 as u32, Rgb([(human_metrics[[i,3]] * 200.0) as u8, (human_metrics[[i,1]] * 200.0) as u8, (human_metrics[[i,4]] * 200.0) as u8]), self.overlay_type);
                         overlay(&mut exit_img, &cover, filteredhumans[i].0 as i64, filteredhumans[i].1 as i64);
                         changed = true;
                     }
@@ -232,23 +258,27 @@ impl ImgCleaner {
         results
     }
 
-    fn create_overlay (width: u32, height: u32, color: Rgb<u8>) -> DynamicImage {
-        let mut husk = ImageBuffer::from_pixel(width, height, color.to_rgba());
-        let icon = ImageReader::new(Cursor::new(include_bytes!("../../icon.tiff"))).with_guessed_format().unwrap().decode().unwrap();
-        let mut resizer = Resizer::new();
-        let mut reicon = if height < width {
-            DynamicImage::new(height, height, ColorType::Rgba8)
+    fn create_overlay (reference: DynamicImage, width: u32, height: u32, color: Rgb<u8>, overlay_type: ImgCleanOverlay) -> DynamicImage {
+        if overlay_type == ImgCleanOverlay::Icon {
+            let mut husk = ImageBuffer::from_pixel(width, height, color.to_rgba());
+            let icon = ImageReader::new(Cursor::new(include_bytes!("../../icon.tiff"))).with_guessed_format().unwrap().decode().unwrap();
+            let mut resizer = Resizer::new();
+            let mut reicon = if height < width {
+                DynamicImage::new(height, height, ColorType::Rgba8)
+            } else {
+                DynamicImage::new(width, width, ColorType::Rgba8)
+            };
+            
+            resizer.resize(&icon, &mut reicon, Some(&ResizeOptions::new().resize_alg(ResizeAlg::Nearest))).unwrap();
+            if height < width {
+                overlay(&mut husk, &reicon, ((width-height)/2) as i64, 0);
+            } else {
+                overlay(&mut husk, &reicon, 0, ((height-width)/2) as i64);
+            }
+            return husk.into();
         } else {
-            DynamicImage::new(width, width, ColorType::Rgba8)
-        };
-        
-        resizer.resize(&icon, &mut reicon, Some(&ResizeOptions::new().resize_alg(ResizeAlg::Nearest))).unwrap();
-        if height < width {
-            overlay(&mut husk, &reicon, ((width-height)/2) as i64, 0);
-        } else {
-            overlay(&mut husk, &reicon, 0, ((height-width)/2) as i64);
+            return reference.blur(80.0);
         }
-        husk.into()
     }
 
     #[cfg(feature = "gif")]

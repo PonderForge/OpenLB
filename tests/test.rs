@@ -12,7 +12,7 @@ fn clean_image() {
     let img = image::open("test.jpg").unwrap();
     
     let now = Instant::now();
-    let out = cleaner.clean_image(img, ImgCleanLevel::Overall);
+    let out = cleaner.clean_image(img, ImgCleanLevel::Human);
     println!("{:?}", now.elapsed());
     if out.is_none() { 
         println!("No NSFW Content Detected");
@@ -25,8 +25,8 @@ fn clean_image() {
 #[test]
 #[cfg(feature = "human_scan")]
 fn clean_humans() {
-    let cleaner = ImgCleaner::builder().commit();
-    let img = image::open("test.webp").unwrap();
+    let cleaner = ImgCleaner::builder().with_overlay_type(openlb::img_filter::ImgCleanOverlay::Blur).commit();
+    let img = image::open("test.jpg").unwrap();
     
     let now = Instant::now();
     let out = cleaner.clean_image(img, ImgCleanLevel::Human);
@@ -76,14 +76,13 @@ fn clean_folder() {
 #[test]
 #[cfg(feature = "image_scan")]
 fn image_time() {
-
     let cleaner = ImgCleaner::builder().commit();
     let input_img = image::open("test.jpg").unwrap();
     let mut tot_time = 0;
     for _ in 0..50 {
         let img = input_img.clone();
         let now = Instant::now();
-        cleaner.classify_image(img, ImgCleanLevel::Overall);
+        cleaner.classify_image(img, ImgCleanLevel::Human);
         tot_time += now.elapsed().as_millis();
     }
     println!("Average Time: {:?}ms", tot_time / 50);
@@ -93,7 +92,7 @@ fn image_time() {
 #[cfg(feature = "human_scan")]
 fn humans_time() {
 
-    let cleaner = ImgCleaner::builder().commit();
+    let cleaner = ImgCleaner::builder().with_overlay_type(openlb::img_filter::ImgCleanOverlay::Icon).commit();
     let input_img = image::open("test.jpg").unwrap();
     let mut tot_time = 0;
     for _ in 0..50 {
